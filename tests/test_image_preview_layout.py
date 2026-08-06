@@ -27,6 +27,85 @@ class ImagePreviewLayoutTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_provider_combo_shows_only_channels_with_api_keys_and_falls_back(self):
+        config = deepcopy(AIConfigManager.DEFAULT_CONFIG)
+        config.update(
+            {
+                "image_provider": "gemini",
+                "gemini_base_url": "https://gemini.example",
+                "gemini_api_key": "gemini-key",
+                "qwen_image_api_key": "qwen-key",
+            }
+        )
+        with (
+            patch.object(AIConfigManager, "load_config", return_value=config),
+            patch.object(AIConfigManager, "save_config", return_value=True),
+        ):
+            window = PromptGeneratorApp()
+
+            self.assertEqual(
+                [
+                    window.image_provider_combo.itemData(index)
+                    for index in range(window.image_provider_combo.count())
+                ],
+                ["gemini", "qwen_image"],
+            )
+            self.assertEqual(window.image_provider_combo.currentData(), "gemini")
+            self.assertEqual(window.image_config_status.text(), "")
+
+            config["gemini_api_key"] = ""
+            window._refresh_image_config_from_dialog()
+
+            self.assertEqual(window.image_provider_combo.count(), 1)
+            self.assertEqual(window.image_provider_combo.currentData(), "qwen_image")
+            window.close()
+
+    def test_provider_combo_has_disabled_empty_state_without_api_keys(self):
+        config = deepcopy(AIConfigManager.DEFAULT_CONFIG)
+        with (
+            patch.object(AIConfigManager, "load_config", return_value=config),
+            patch.object(AIConfigManager, "save_config", return_value=True),
+        ):
+            window = PromptGeneratorApp()
+
+            self.assertEqual(window.image_provider_combo.count(), 1)
+            self.assertIsNone(window.image_provider_combo.currentData())
+            self.assertFalse(window.image_provider_combo.isEnabled())
+            self.assertFalse(window.image_model_combo.isEnabled())
+            self.assertFalse(window.generate_image_btn.isEnabled())
+            self.assertIn("填写密钥", window.image_config_status.text())
+            window.close()
+
+    def test_image_options_use_a_compact_two_column_grid(self):
+        config = deepcopy(AIConfigManager.DEFAULT_CONFIG)
+        config.update(
+            {
+                "image_provider": "qwen_image",
+                "qwen_image_api_key": "qwen-key",
+            }
+        )
+        with (
+            patch.object(AIConfigManager, "load_config", return_value=config),
+            patch.object(AIConfigManager, "save_config", return_value=True),
+        ):
+            window = PromptGeneratorApp()
+
+            positions = [
+                window.image_options_layout.getItemPosition(index)
+                for index in range(window.image_options_layout.count())
+            ]
+            self.assertEqual(
+                positions,
+                [
+                    (0, 0, 1, 1),
+                    (0, 1, 1, 1),
+                    (1, 0, 1, 1),
+                    (1, 1, 1, 1),
+                ],
+            )
+            self.assertEqual(len(window.image_option_widgets), 4)
+            window.close()
+
     def test_preview_image_fits_inside_canvas_at_minimum_window_size(self):
         config = deepcopy(AIConfigManager.DEFAULT_CONFIG)
         with (

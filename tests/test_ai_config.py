@@ -120,6 +120,20 @@ class AIConfigManagerTests(unittest.TestCase):
         self.manager.save_config({"gemini_base_url": "https://gemini.example"})
         self.assertTrue(self.manager.is_image_provider_configured("gemini"))
 
+    def test_image_provider_choices_include_only_non_empty_api_keys(self):
+        self._write(
+            {
+                "gemini_api_key": " gemini-key ",
+                "openai_image_api_key": "   ",
+                "qwen_image_api_key": "qwen-key",
+            }
+        )
+
+        self.assertEqual(
+            self.manager.get_image_providers_with_api_key(),
+            ["gemini", "qwen_image"],
+        )
+
     def test_model_capability_override_does_not_mutate_provider_defaults(self):
         model = "test-model-with-override"
         IMAGE_PROVIDER_META["gemini"].setdefault("model_capabilities", {})[model] = {

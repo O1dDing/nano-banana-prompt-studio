@@ -126,6 +126,14 @@ class AIConfigManager:
             for key in ("base_url", "api_key", "model")
         )
 
+    def get_image_providers_with_api_key(self) -> list[str]:
+        """按界面定义顺序返回已填写 API 密钥的图片渠道。"""
+        return [
+            provider
+            for provider in IMAGE_PROVIDER_META
+            if self.get_image_provider_config(provider)["api_key"]
+        ]
+
     def set_active_image_selection(self, provider: str, model: str | None = None) -> bool:
         """保存主界面当前使用的图片渠道和模型，不改动任何凭证。"""
         meta = IMAGE_PROVIDER_META.get(provider)

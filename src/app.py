@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QScrollArea,
     QSplitter,
     QPushButton,
@@ -846,8 +847,6 @@ class PromptGeneratorApp(QMainWindow):
 
         provider_layout.addWidget(QLabel("渠道"))
         self.image_provider_combo = QComboBox()
-        for provider_id, meta in IMAGE_PROVIDER_META.items():
-            self.image_provider_combo.addItem(meta["label"], provider_id)
         provider_layout.addWidget(self.image_provider_combo, 1)
 
         provider_layout.addWidget(QLabel("模型"))
@@ -860,9 +859,12 @@ class PromptGeneratorApp(QMainWindow):
         param_layout.addWidget(provider_row)
 
         self.image_options_container = QWidget()
-        self.image_options_layout = QVBoxLayout(self.image_options_container)
+        self.image_options_layout = QGridLayout(self.image_options_container)
         self.image_options_layout.setContentsMargins(0, 0, 0, 0)
-        self.image_options_layout.setSpacing(8)
+        self.image_options_layout.setHorizontalSpacing(16)
+        self.image_options_layout.setVerticalSpacing(8)
+        self.image_options_layout.setColumnStretch(0, 1)
+        self.image_options_layout.setColumnStretch(1, 1)
         param_layout.addWidget(self.image_options_container)
         self._load_image_generation_controls()
 
@@ -952,7 +954,8 @@ class PromptGeneratorApp(QMainWindow):
         container_layout.setSpacing(12)
 
         label = QLabel(label_text)
-        label.setStyleSheet("font-size: 12px; color: #595959; min-width: 60px;")
+        label.setFixedWidth(72)
+        label.setStyleSheet("font-size: 12px; color: #595959;")
         container_layout.addWidget(label)
 
         combo = QComboBox()
@@ -972,23 +975,55 @@ class PromptGeneratorApp(QMainWindow):
                 border-color: #40a9ff;
             }
         """)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         container_layout.addWidget(combo, 1)
 
         return container
 
     def _load_image_generation_controls(self):
         """从配置加载主界面的当前生图渠道与模型。"""
-        provider = self.config_manager.get_image_provider()
-        index = self.image_provider_combo.findData(provider)
-        self.image_provider_combo.blockSignals(True)
-        self.image_provider_combo.setCurrentIndex(index if index >= 0 else 0)
-        self.image_provider_combo.blockSignals(False)
+        provider = self._refresh_image_provider_choices(
+            self.config_manager.get_image_provider()
+        )
+        if not provider:
+            self._render_image_options("", "", cache_current=False)
+            self.image_provider_combo.currentIndexChanged.connect(self._on_image_provider_changed)
+            self.image_model_combo.currentIndexChanged.connect(self._on_image_model_changed)
+            return
         self._populate_image_models(provider)
         model = self.image_model_combo.currentText()
         self.config_manager.set_active_image_selection(provider, model)
         self._render_image_options(provider, model)
         self.image_provider_combo.currentIndexChanged.connect(self._on_image_provider_changed)
         self.image_model_combo.currentIndexChanged.connect(self._on_image_model_changed)
+
+    def _refresh_image_provider_choices(self, preferred_provider: str = "") -> str:
+        """仅显示已填写密钥的渠道，并返回最终选中的渠道。"""
+        available_providers = self.config_manager.get_image_providers_with_api_key()
+        stored_provider = self.config_manager.get_image_provider()
+        selected_provider = next(
+            (
+                provider
+                for provider in (preferred_provider, stored_provider)
+                if provider in available_providers
+            ),
+            available_providers[0] if available_providers else "",
+        )
+
+        self.image_provider_combo.blockSignals(True)
+        self.image_provider_combo.clear()
+        for provider in available_providers:
+            self.image_provider_combo.addItem(IMAGE_PROVIDER_META[provider]["label"], provider)
+        if selected_provider:
+            self.image_provider_combo.setCurrentIndex(
+                self.image_provider_combo.findData(selected_provider)
+            )
+        else:
+            self.image_provider_combo.addItem("请先配置图片渠道", None)
+        self.image_provider_combo.setEnabled(bool(available_providers))
+        self.image_provider_combo.blockSignals(False)
+        self.image_model_combo.setEnabled(bool(available_providers))
+        return selected_provider
 
     def _populate_image_models(self, provider: str, preferred_model: str = ""):
         meta = IMAGE_PROVIDER_META.get(provider) or IMAGE_PROVIDER_META["gemini"]
@@ -1014,14 +1049,18 @@ class PromptGeneratorApp(QMainWindow):
 
     def _on_image_provider_changed(self, *_args):
         self._cache_current_image_options()
-        provider = self.image_provider_combo.currentData() or "gemini"
+        provider = self.image_provider_combo.currentData()
+        if not provider:
+            return
         self._populate_image_models(provider)
         model = self.image_model_combo.currentText().strip()
         self.config_manager.set_active_image_selection(provider, model)
         self._render_image_options(provider, model, cache_current=False)
 
     def _on_image_model_changed(self, *_args):
-        provider = self.image_provider_combo.currentData() or "gemini"
+        provider = self.image_provider_combo.currentData()
+        if not provider:
+            return
         model = self.image_model_combo.currentText().strip()
         if provider == self._active_image_provider and model == self._active_image_model:
             return
@@ -1048,14 +1087,22 @@ class PromptGeneratorApp(QMainWindow):
                 widget.deleteLater()
 
         self.image_option_widgets = {}
-        provider = provider or self.image_provider_combo.currentData() or "gemini"
+        provider = provider or self.image_provider_combo.currentData()
+        if not provider:
+            self._active_image_provider = ""
+            self._active_image_model = ""
+            self.image_model_combo.blockSignals(True)
+            self.image_model_combo.clear()
+            self.image_model_combo.blockSignals(False)
+            self._update_image_config_status()
+            return
         model = (model if model is not None else self.image_model_combo.currentText()).strip()
         self._active_image_provider = provider
         self._active_image_model = model
         provider_config = get_image_provider_capabilities(provider, model)
         saved_options = self.config_manager.get_image_generation_options(provider, model)
 
-        for key, option in provider_config["options"].items():
+        for index, (key, option) in enumerate(provider_config["options"].items()):
             value = saved_options.get(key, option.get("default"))
             if value not in option.get("values", []):
                 value = option.get("default")
@@ -1067,15 +1114,19 @@ class PromptGeneratorApp(QMainWindow):
             combo = container.findChild(QComboBox)
             combo.currentTextChanged.connect(self._on_image_option_changed)
             self.image_option_widgets[key] = combo
-            self.image_options_layout.addWidget(container)
+            self.image_options_layout.addWidget(container, index // 2, index % 2)
         self._update_image_config_status()
 
     def _update_image_config_status(self):
-        provider = self.image_provider_combo.currentData() or "gemini"
-        configured = self.config_manager.is_image_provider_configured(provider)
-        if configured:
-            self.image_config_status.setText("已配置")
-            self.image_config_status.setStyleSheet("color: #389e0d; font-size: 12px;")
+        provider = self.image_provider_combo.currentData()
+        configured = bool(
+            provider and self.config_manager.is_image_provider_configured(provider)
+        )
+        if not provider:
+            self.image_config_status.setText("请先在 AI 配置中填写密钥")
+            self.image_config_status.setStyleSheet("color: #cf1322; font-size: 12px;")
+        elif configured:
+            self.image_config_status.clear()
         else:
             self.image_config_status.setText("未配置")
             self.image_config_status.setStyleSheet("color: #cf1322; font-size: 12px;")
@@ -1642,7 +1693,10 @@ class PromptGeneratorApp(QMainWindow):
                     prompt_text = prompt_text + "\n\n特别要求：" + special_text
 
         try:
-            provider = self.image_provider_combo.currentData() or "gemini"
+            provider = self.image_provider_combo.currentData()
+            if not provider:
+                QMessageBox.warning(self, "未配置图片渠道", "请先在 AI 配置中填写渠道密钥。")
+                return
             model = self.image_model_combo.currentText().strip()
             image_config = self.config_manager.get_active_image_config(provider, model)
         except ValueError as exc:
@@ -1767,14 +1821,18 @@ class PromptGeneratorApp(QMainWindow):
     def _open_image_config_dialog(self):
         """打开当前图片渠道的连接配置。"""
         from components.ai_dialog import UnifiedAIConfigDialog
-        provider = self.image_provider_combo.currentData() or "gemini"
+        provider = self.image_provider_combo.currentData() or self.config_manager.get_image_provider()
         dialog = UnifiedAIConfigDialog(self, initial_tab="image", image_provider=provider)
         dialog.config_saved.connect(self._refresh_image_config_from_dialog)
         dialog.exec()
 
     def _refresh_image_config_from_dialog(self):
-        provider = self.image_provider_combo.currentData() or "gemini"
+        provider = self.image_provider_combo.currentData() or ""
         self._cache_current_image_options()
+        provider = self._refresh_image_provider_choices(provider)
+        if not provider:
+            self._render_image_options("", "", cache_current=False)
+            return
         self._populate_image_models(provider)
         model = self.image_model_combo.currentText().strip()
         self.config_manager.set_active_image_selection(provider, model)
