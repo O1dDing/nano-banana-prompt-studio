@@ -8,6 +8,10 @@ from utils.resource_path import get_config_path
 class YamlHandler:
     """处理YAML配置文件的读写操作"""
 
+    DEFAULT_FIELD_OPTIONS = {
+        "反向提示词标签": ["水印、签名、文字"],
+    }
+
     def __init__(self):
         self.config_path = get_config_path()
         self._ensure_config_exists()
@@ -45,13 +49,15 @@ class YamlHandler:
     def get_field_options(self, field_name: str) -> list:
         """获取指定字段的选项列表"""
         options = self.load_options()
-        return options.get(field_name, [])
+        if field_name in options:
+            return options[field_name]
+        return list(self.DEFAULT_FIELD_OPTIONS.get(field_name, []))
 
     def add_option(self, field_name: str, value: str):
         """为指定字段添加一个选项"""
         options = self.load_options()
         if field_name not in options:
-            options[field_name] = []
+            options[field_name] = list(self.DEFAULT_FIELD_OPTIONS.get(field_name, []))
         if value and value not in options[field_name]:
             options[field_name].append(value)
             self.save_options(options)
@@ -59,7 +65,9 @@ class YamlHandler:
     def remove_option(self, field_name: str, value: str):
         """从指定字段删除一个选项"""
         options = self.load_options()
-        if field_name in options and value in options[field_name]:
+        if field_name not in options:
+            options[field_name] = list(self.DEFAULT_FIELD_OPTIONS.get(field_name, []))
+        if value in options[field_name]:
             options[field_name].remove(value)
             self.save_options(options)
 

@@ -5,9 +5,50 @@ const state = {
     currentData: null,
     presets: [],
     config: {},
+
     imageProviders: {},
     uploadedImages: [], // Base64 strings
     isGenerating: false
+};
+
+const DEFAULT_NEGATIVE_PROMPT = '水印、签名、文字';
+
+const categoryPresetConfig = {
+    basic: [
+        ['styleMode', ['风格模式']],
+        ['atmosphere', ['画面气质']]
+    ],
+    scene: [
+        ['location', ['场景', '环境', '地点设定']],
+        ['lighting', ['场景', '环境', '光线']],
+        ['weather', ['场景', '环境', '天气氛围']],
+        ['background', ['场景', '背景', '描述']],
+        ['depth', ['场景', '背景', '景深']]
+    ],
+    subject: [
+        ['description', ['场景', '主体', '整体描述']],
+        ['bodyShape', ['场景', '主体', '外形特征', '身材']],
+        ['face', ['场景', '主体', '外形特征', '面部']],
+        ['hair', ['场景', '主体', '外形特征', '头发']],
+        ['eyes', ['场景', '主体', '外形特征', '眼睛']],
+        ['emotion', ['场景', '主体', '表情与动作', '情绪']],
+        ['action', ['场景', '主体', '表情与动作', '动作']],
+        ['clothing', ['场景', '主体', '服装', '穿着']],
+        ['accessories', ['场景', '主体', '配饰']]
+    ],
+    camera: [
+        ['angle', ['相机', '机位角度']],
+        ['composition', ['相机', '构图']],
+        ['lensCharacteristics', ['相机', '镜头特性']],
+        ['sensorQuality', ['相机', '传感器画质']]
+    ],
+    aesthetic: [
+        ['intent', ['审美控制', '呈现意图']],
+        ['materialRealism', ['审美控制', '材质真实度']],
+        ['overallTone', ['审美控制', '色彩风格', '整体色调']],
+        ['contrast', ['审美控制', '色彩风格', '对比度']],
+        ['specialEffects', ['审美控制', '色彩风格', '特殊效果']]
+    ]
 };
 
 // ========================================
@@ -34,6 +75,7 @@ const elements = {
     clothing: document.getElementById('clothing'),
     accessories: document.getElementById('accessories'),
     background: document.getElementById('background'),
+    depth: document.getElementById('depth'),
 
     // 相机设置
     angle: document.getElementById('angle'),
@@ -60,8 +102,10 @@ const elements = {
 
     negativePromptEnabled: document.getElementById('negativePromptEnabled'),
     negativePromptGroup: document.getElementById('negativePromptGroup'),
-    negativeElementsContainer: document.getElementById('negativeElementsContainer'),
-    negativeStylesContainer: document.getElementById('negativeStylesContainer'),
+    negativeTagsContainer: document.getElementById('negativeTagsContainer'),
+    negativeTagInput: document.getElementById('negativeTagInput'),
+    addNegativeTagBtn: document.getElementById('addNegativeTagBtn'),
+    negativePromptInput: document.getElementById('negativePromptInput'),
 
     // 预设
     presetSelect: document.getElementById('presetSelect'),
@@ -125,6 +169,9 @@ const elements = {
     configOpenAIImageBaseUrl: document.getElementById('configOpenAIImageBaseUrl'),
     configOpenAIImageApiKey: document.getElementById('configOpenAIImageApiKey'),
     configOpenAIImageModel: document.getElementById('configOpenAIImageModel'),
+    configQwenImageBaseUrl: document.getElementById('configQwenImageBaseUrl'),
+    configQwenImageApiKey: document.getElementById('configQwenImageApiKey'),
+    configQwenImageModel: document.getElementById('configQwenImageModel'),
 
     saveConfigBtn: document.getElementById('saveConfigBtn'),
 
@@ -146,6 +193,22 @@ function showToast(message, type = 'info') {
 // ========================================
 // 表单数据处理 (保持原有的逻辑)
 // ========================================
+function normalizeNegativePrompt(value) {
+    if (typeof value === 'string') return value;
+    if (!value || typeof value !== 'object') return '';
+
+    const values = [];
+    ['禁止元素', '禁止风格'].forEach(key => {
+        const item = value[key];
+        if (Array.isArray(item)) {
+            values.push(...item);
+        } else if (item) {
+            values.push(item);
+        }
+    });
+    return values.filter(Boolean).join(', ');
+}
+
 function getFormData() {
     function stringToArray(str) {
         if (!str || !str.trim()) return [];
@@ -155,15 +218,6 @@ function getFormData() {
     const materialRealismValue = elements.materialRealism.value.trim();
     const materialRealismArray = materialRealismValue ? stringToArray(materialRealismValue) : [];
 
-    // Helper to get checked values from container
-    function getCheckedValues(container) {
-        const checked = [];
-        const checkboxes = container.querySelectorAll('input[type="checkbox"]');
-        checkboxes.forEach(cb => {
-            if (cb.checked) checked.push(cb.value);
-        });
-        return checked;
-    }
 
     const data = {
         "风格模式": elements.styleMode.value,
@@ -196,7 +250,7 @@ function getFormData() {
             },
             "背景": {
                 "描述": elements.background.value,
-                // "景深": ...
+                "景深": elements.depth.value
             }
         },
         "相机": {
@@ -231,13 +285,7 @@ function getFormData() {
 
     // Add Negative Prompt if enabled
     if (elements.negativePromptEnabled.checked) {
-        const negativeElements = getCheckedValues(elements.negativeElementsContainer);
-        const negativeStyles = getCheckedValues(elements.negativeStylesContainer);
-        
-        data["反向提示词"] = {
-            "禁止元素": negativeElements,
-            "禁止风格": negativeStyles
-        };
+        data["反向提示词"] = elements.negativePromptInput.value.trim();
     }
 
     return data;
@@ -289,6 +337,7 @@ function setFormData(data) {
     elements.clothing.value = getValue(data, "场景", "主体", "服装", "穿着");
     elements.accessories.value = getValue(data, "场景", "主体", "配饰");
     elements.background.value = getValue(data, "场景", "背景", "描述");
+    elements.depth.value = getValue(data, "场景", "背景", "景深");
 
     elements.angle.value = getValue(data, "相机", "机位角度");
     elements.composition.value = getValue(data, "相机", "构图");
@@ -329,33 +378,129 @@ function setFormData(data) {
     }
 
     // Negative Prompt
-    const negativePrompt = getValue(data, "反向提示词");
-    
-    function setCheckedValues(container, values) {
-        const checkboxes = container.querySelectorAll('input[type="checkbox"]');
-        checkboxes.forEach(cb => {
-            cb.checked = values.includes(cb.value);
-        });
-    }
+    const negativePrompt = normalizeNegativePrompt(getValue(data, "反向提示词"));
 
-    if (negativePrompt) {
-        elements.negativePromptEnabled.checked = true;
-        elements.negativePromptGroup.style.display = 'flex';
-        
-        const negativeElements = negativePrompt["禁止元素"] || [];
-        const negativeStyles = negativePrompt["禁止风格"] || [];
-        
-        setCheckedValues(elements.negativeElementsContainer, negativeElements);
-        setCheckedValues(elements.negativeStylesContainer, negativeStyles);
-    } else {
-        elements.negativePromptEnabled.checked = false;
-        elements.negativePromptGroup.style.display = 'none';
-        setCheckedValues(elements.negativeElementsContainer, []);
-        setCheckedValues(elements.negativeStylesContainer, []);
-    }
+    elements.negativePromptInput.value = negativePrompt;
+    elements.negativePromptEnabled.checked = Boolean(negativePrompt);
+    elements.negativePromptGroup.style.display = negativePrompt ? 'flex' : 'none';
 
     // Trigger update for preview
     updateJsonPreview();
+}
+
+function setNestedValue(target, path, value) {
+    let current = target;
+    path.slice(0, -1).forEach(key => {
+        if (!current[key]) current[key] = {};
+        current = current[key];
+    });
+    current[path[path.length - 1]] = value;
+}
+
+function collectCategoryPresetData(scope) {
+    const fullData = getFormData();
+    const result = {};
+    (categoryPresetConfig[scope] || []).forEach(([, path]) => {
+        const value = getNestedValue(fullData, path);
+        if (value !== undefined) setNestedValue(result, path, value);
+    });
+    return result;
+}
+
+function applyCategoryPresetData(scope, data) {
+    (categoryPresetConfig[scope] || []).forEach(([elementId, path]) => {
+        const value = getNestedValue(data, path);
+        if (value === undefined) return;
+        const element = document.getElementById(elementId);
+        if (!element) return;
+        element.value = Array.isArray(value) ? value.join(', ') : (value ?? '');
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    updateJsonPreview();
+}
+
+async function loadCategoryPresetOptions(scope, selectedName = '') {
+    const bar = document.querySelector(`.category-preset-bar[data-preset-scope="${scope}"]`);
+    if (!bar) return;
+    const selector = bar.querySelector('select');
+    try {
+        const response = await fetch(`/api/category-presets/${scope}`);
+        if (!response.ok) throw new Error('加载分类预设失败');
+        const presets = await response.json();
+        selector.innerHTML = '<option value="">分类预设...</option>';
+        presets.forEach(preset => {
+            const option = document.createElement('option');
+            option.value = preset.name;
+            option.textContent = preset.name;
+            selector.appendChild(option);
+        });
+        if (selectedName) selector.value = selectedName;
+    } catch (error) {
+        console.error(error);
+    }
+}
+
+function initCategoryPresets() {
+    document.querySelectorAll('.category-preset-bar').forEach(bar => {
+        const scope = bar.dataset.presetScope;
+        const label = bar.dataset.presetLabel;
+        bar.innerHTML = `
+            <span class="category-preset-label">分类预设</span>
+            <select class="select-input" aria-label="${label}预设">
+                <option value="">分类预设...</option>
+            </select>
+            <button type="button" class="btn btn-secondary btn-compact" data-action="save">保存当前分类</button>
+            <button type="button" class="btn btn-danger btn-compact" data-action="delete">删除</button>
+        `;
+        const selector = bar.querySelector('select');
+
+        selector.addEventListener('change', async () => {
+            if (!selector.value) return;
+            try {
+                const name = encodeURIComponent(selector.value);
+                const response = await fetch(`/api/category-presets/${scope}/${name}`);
+                if (!response.ok) throw new Error('加载分类预设失败');
+                applyCategoryPresetData(scope, await response.json());
+                showToast(`已应用${label}预设: ${selector.value}`);
+            } catch (error) {
+                console.error(error);
+                showToast('分类预设加载失败');
+            }
+        });
+
+        bar.querySelector('[data-action="save"]').addEventListener('click', async () => {
+            const name = prompt(`请输入${label}预设名称:`, selector.value);
+            if (!name || !name.trim()) return;
+            const response = await fetch(`/api/category-presets/${scope}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name.trim(), data: collectCategoryPresetData(scope) })
+            });
+            if (!response.ok) {
+                showToast('分类预设保存失败');
+                return;
+            }
+            await loadCategoryPresetOptions(scope, name.trim());
+            showToast(`${label}预设已保存: ${name.trim()}`);
+        });
+
+        bar.querySelector('[data-action="delete"]').addEventListener('click', async () => {
+            const name = selector.value;
+            if (!name || !confirm(`确定删除${label}预设「${name}」吗?`)) return;
+            const response = await fetch(
+                `/api/category-presets/${scope}/${encodeURIComponent(name)}`,
+                { method: 'DELETE' }
+            );
+            if (!response.ok) {
+                showToast('分类预设删除失败');
+                return;
+            }
+            await loadCategoryPresetOptions(scope);
+            showToast(`已删除分类预设: ${name}`);
+        });
+
+        loadCategoryPresetOptions(scope);
+    });
 }
 
 function clearForm() {
@@ -371,12 +516,10 @@ function clearForm() {
             }
         }
     });
-    // Clear negative prompt checkboxes
-    [elements.negativeElementsContainer, elements.negativeStylesContainer].forEach(container => {
-        if (container) {
-            container.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
-        }
-    });
+    elements.negativePromptEnabled.checked = true;
+    elements.negativePromptInput.value = DEFAULT_NEGATIVE_PROMPT;
+    elements.negativePromptGroup.style.display = 'flex';
+
 
     updateJsonPreview();
 }
@@ -441,13 +584,19 @@ function openConfigModal() {
     elements.configApiKey.value = ''; // Don't show API key
     elements.configModel.value = state.config.model || '';
 
-    elements.configImageProvider.value = state.config.image_provider || 'gemini';
+    const configuredProvider = state.config.image_provider || 'gemini';
+    elements.configImageProvider.value = state.imageProviders[configuredProvider]
+        ? configuredProvider
+        : 'gemini';
     elements.configGeminiBaseUrl.value = state.config.gemini_base_url || '';
     elements.configGeminiApiKey.value = '';
     elements.configGeminiModel.value = state.config.gemini_model || '';
     elements.configOpenAIImageBaseUrl.value = state.config.openai_image_base_url || '';
     elements.configOpenAIImageApiKey.value = '';
     elements.configOpenAIImageModel.value = state.config.openai_image_model || 'gpt-image-2';
+    elements.configQwenImageBaseUrl.value = state.config.qwen_image_base_url || '';
+    elements.configQwenImageApiKey.value = '';
+    elements.configQwenImageModel.value = state.config.qwen_image_model || 'qwen-image-3.0-pro';
     updateImageConfigVisibility();
 
     elements.configModal.classList.add('active');
@@ -461,7 +610,9 @@ async function saveConfigs() {
         gemini_base_url: elements.configGeminiBaseUrl.value,
         gemini_model: elements.configGeminiModel.value,
         openai_image_base_url: elements.configOpenAIImageBaseUrl.value,
-        openai_image_model: elements.configOpenAIImageModel.value
+        openai_image_model: elements.configOpenAIImageModel.value,
+        qwen_image_base_url: elements.configQwenImageBaseUrl.value,
+        qwen_image_model: elements.configQwenImageModel.value
     };
     if (elements.configApiKey.value) {
         payload.api_key = elements.configApiKey.value;
@@ -472,6 +623,9 @@ async function saveConfigs() {
     if (elements.configOpenAIImageApiKey.value) {
         payload.openai_image_api_key = elements.configOpenAIImageApiKey.value;
     }
+    if (elements.configQwenImageApiKey.value) {
+        payload.qwen_image_api_key = elements.configQwenImageApiKey.value;
+    }
 
     try {
         const response = await fetch('/api/config', {
@@ -480,11 +634,12 @@ async function saveConfigs() {
             body: JSON.stringify(payload)
         });
         if (response.ok) {
+            await loadConfig();
             showToast('配置保存成功', 'success');
             elements.configModal.classList.remove('active');
-            loadConfig();
         } else {
-            showToast('保存失败', 'error');
+            const error = await response.json().catch(() => ({}));
+            showToast('保存失败: ' + (error.error || response.statusText), 'error');
         }
     } catch (e) {
         showToast('保存出错: ' + e, 'error');
@@ -503,7 +658,9 @@ function renderImageProviderOptions() {
     if (!providerConfig || !providerConfig.options) return;
 
     if (elements.activeImageProvider) {
-        elements.activeImageProvider.textContent = `当前生图渠道：${providerConfig.label || provider}`;
+        elements.activeImageProvider.textContent = state.imageProviders[provider]
+            ? `当前生图渠道：${providerConfig.label || provider}`
+            : `当前生图渠道配置无效：${provider}`;
     }
 
     elements.imageProviderOptions.innerHTML = Object.entries(providerConfig.options).map(([key, option]) => {
@@ -1157,9 +1314,7 @@ function init() {
     });
     elements.saveConfigBtn.addEventListener('click', saveConfigs);
     elements.configImageProvider.addEventListener('change', () => {
-        state.config.image_provider = elements.configImageProvider.value;
         updateImageConfigVisibility();
-        renderImageProviderOptions();
     });
 
     elements.resetFormBtn.addEventListener('click', clearForm);
@@ -1243,6 +1398,7 @@ function init() {
 
     // Load presets logic
     loadPresets();
+    initCategoryPresets();
     updateFieldSuggestions();
 
     // Init Advanced Settings
@@ -1363,43 +1519,117 @@ async function initAdvancedSettings() {
         updateJsonPreview();
     });
 
-    // Load Negative Prompt Options
-    try {
-        const res = await fetch('/api/options');
-        const options = await res.json();
-        
-        const renderCheckboxes = (container, items) => {
-            container.innerHTML = '';
-            if (!items || items.length === 0) {
-                container.innerHTML = '<span style="color: var(--text-tertiary);">无选项</span>';
-                return;
-            }
-            items.forEach(item => {
-                const label = document.createElement('label');
-                label.style.display = 'flex';
-                label.style.alignItems = 'center';
-                label.style.marginRight = '10px';
-                label.style.cursor = 'pointer';
-                label.style.fontSize = '12px';
-                
-                const cb = document.createElement('input');
-                cb.type = 'checkbox';
-                cb.value = item;
-                cb.style.marginRight = '4px';
-                cb.addEventListener('change', updateJsonPreview);
-                
-                label.appendChild(cb);
-                label.appendChild(document.createTextNode(item));
-                container.appendChild(label);
-            });
-        };
+    const negativeTagEndpoint =
+        '/api/options/' + encodeURIComponent('反向提示词标签');
 
-        renderCheckboxes(elements.negativeElementsContainer, options['禁止元素']);
-        renderCheckboxes(elements.negativeStylesContainer, options['禁止风格']);
+    const applyNegativeTag = item => {
+        const current = elements.negativePromptInput.value.trim();
+        if (!current) {
+            elements.negativePromptInput.value = item;
+        } else if (!current.includes(item)) {
+            const separator = /[,，\s]$/.test(current) ? '' : ', ';
+            elements.negativePromptInput.value = current + separator + item;
+        }
+        elements.negativePromptInput.dispatchEvent(
+            new Event('input', { bubbles: true })
+        );
+        elements.negativePromptInput.focus();
+    };
 
-    } catch (e) {
-        console.error('Failed to load options for negative prompts', e);
+    const renderNegativeTags = items => {
+        elements.negativeTagsContainer.innerHTML = '';
+        if (!items || items.length === 0) {
+            elements.negativeTagsContainer.innerHTML =
+                '<span style="color: var(--text-tertiary);">无标签</span>';
+            return;
+        }
+
+        items.forEach(item => {
+            const tag = document.createElement('span');
+            tag.className = 'negative-tag';
+
+            const applyButton = document.createElement('button');
+            applyButton.type = 'button';
+            applyButton.className = 'negative-tag-value';
+            applyButton.textContent = item;
+            applyButton.addEventListener('click', () => applyNegativeTag(item));
+
+            const deleteButton = document.createElement('button');
+            deleteButton.type = 'button';
+            deleteButton.className = 'negative-tag-delete';
+            deleteButton.textContent = '×';
+            deleteButton.title = '删除标签：' + item;
+            deleteButton.setAttribute('aria-label', '删除标签：' + item);
+            deleteButton.addEventListener('click', () => deleteNegativeTag(item));
+
+            tag.appendChild(applyButton);
+            tag.appendChild(deleteButton);
+            elements.negativeTagsContainer.appendChild(tag);
+        });
+    };
+
+    async function loadNegativeTags() {
+        try {
+            const response = await fetch(negativeTagEndpoint);
+            if (!response.ok) throw new Error(response.statusText);
+            renderNegativeTags(await response.json());
+        } catch (e) {
+            console.error('Failed to load negative prompt tags', e);
+        }
     }
+
+    const deleteNegativeTag = async item => {
+        try {
+            const response = await fetch(negativeTagEndpoint, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value: item })
+            });
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.error || response.statusText);
+            }
+            await loadNegativeTags();
+            showToast('标签已删除', 'success');
+        } catch (e) {
+            showToast('删除失败: ' + e.message, 'error');
+        }
+    };
+
+    const addNegativeTag = async () => {
+        const value = elements.negativeTagInput.value.trim();
+        if (!value) {
+            showToast('请输入标签内容', 'error');
+            return;
+        }
+
+        try {
+            const response = await fetch(negativeTagEndpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ value })
+            });
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.error || response.statusText);
+            }
+
+            elements.negativeTagInput.value = '';
+            await loadNegativeTags();
+            showToast('标签已添加', 'success');
+        } catch (e) {
+            showToast('添加失败: ' + e.message, 'error');
+        }
+    };
+
+    elements.addNegativeTagBtn.addEventListener('click', addNegativeTag);
+    elements.negativeTagInput.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            addNegativeTag();
+        }
+    });
+    await loadNegativeTags();
 }
 
 async function loadPresets() {
@@ -1435,6 +1665,7 @@ const fieldPresetPaths = {
     clothing: ["场景", "主体", "服装", "穿着"],
     accessories: ["场景", "主体", "配饰"],
     background: ["场景", "背景", "描述"],
+    depth: ["场景", "背景", "景深"],
     angle: ["相机", "机位角度"],
     composition: ["相机", "构图"],
     lensCharacteristics: ["相机", "镜头特性"],

@@ -324,8 +324,7 @@ def create_output():
     # 复制预设文件
     presets_src = Path('src/presets')
     if presets_src.exists():
-        for preset_file in presets_src.glob('*.json'):
-            shutil.copy2(preset_file, presets_dir / preset_file.name)
+        shutil.copytree(presets_src, presets_dir, dirs_exist_ok=True)
     
     # 复制 logo
     logo_src = Path('images/logo.png')

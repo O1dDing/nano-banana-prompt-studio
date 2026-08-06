@@ -78,7 +78,7 @@
                 <button class="tab-btn" data-tab="scene">场景描绘</button>
                 <button class="tab-btn" data-tab="subject">主体特征</button>
                 <button class="tab-btn" data-tab="camera">相机镜头</button>
-                <button class="tab-btn" data-tab="aesthetic">审美控制</button>
+                <button class="tab-btn" data-tab="aesthetic">调色与质感</button>
                 <button class="tab-btn" data-tab="advanced">高级设置</button>
             </div>
 
@@ -107,6 +107,7 @@
 
                 <!-- 基础设置 -->
                 <div id="tab-basic" class="tab-panel active">
+                    <div class="category-preset-bar" data-preset-scope="basic" data-preset-label="基础设置"></div>
                     <div class="form-grid">
                         <div class="form-group">
                             <label for="styleMode">风格模式</label>
@@ -121,6 +122,7 @@
 
                 <!-- 场景设置 -->
                 <div id="tab-scene" class="tab-panel">
+                    <div class="category-preset-bar" data-preset-scope="scene" data-preset-label="场景设置"></div>
                     <div class="form-grid">
                         <div class="form-group">
                             <label for="location">地点设定</label>
@@ -138,11 +140,16 @@
                             <label for="background">背景描述</label>
                             <textarea id="background" class="textarea-input" rows="3"></textarea>
                         </div>
+                        <div class="form-group">
+                            <label for="depth">景深</label>
+                            <input type="text" id="depth" class="text-input">
+                        </div>
                     </div>
                 </div>
 
                 <!-- 主体设置 -->
                 <div id="tab-subject" class="tab-panel">
+                    <div class="category-preset-bar" data-preset-scope="subject" data-preset-label="主体特征"></div>
                     <div class="form-grid">
                         <div class="form-group" style="grid-column: span 2;">
                             <label for="description">整体描述</label>
@@ -185,6 +192,7 @@
 
                 <!-- 相机设置 -->
                 <div id="tab-camera" class="tab-panel">
+                    <div class="category-preset-bar" data-preset-scope="camera" data-preset-label="相机镜头"></div>
                     <div class="form-grid">
                         <div class="form-group">
                             <label for="angle">机位角度</label>
@@ -205,8 +213,9 @@
                     </div>
                 </div>
 
-                <!-- 审美控制 -->
+                <!-- 调色与质感 -->
                 <div id="tab-aesthetic" class="tab-panel">
+                    <div class="category-preset-bar" data-preset-scope="aesthetic" data-preset-label="调色与质感"></div>
                     <div class="form-grid">
                         <div class="form-group">
                             <label for="intent">呈现意图</label>
@@ -225,7 +234,7 @@
                             <input type="text" id="contrast" class="text-input">
                         </div>
                         <div class="form-group">
-                            <label for="specialEffects">特殊效果</label>
+                            <label for="specialEffects">后期效果</label>
                             <input type="text" id="specialEffects" class="text-input">
                         </div>
                     </div>
@@ -264,23 +273,23 @@
                         <!-- 反向提示词 -->
                         <div class="advanced-section">
                             <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                                <input type="checkbox" id="negativePromptEnabled" style="margin-right: 8px;">
+                                <input type="checkbox" id="negativePromptEnabled" style="margin-right: 8px;" checked>
                                 <label for="negativePromptEnabled" style="font-weight: 600; margin-bottom: 0;">启用反向提示词</label>
                             </div>
-                            <div id="negativePromptGroup" style="display: none; display: flex; flex-direction: column; gap: 15px;">
+                            <div id="negativePromptGroup" style="display: flex; flex-direction: column; gap: 10px;">
                                 <div class="form-group">
-                                    <label>禁止元素</label>
-                                    <div id="negativeElementsContainer" style="display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 4px; max-height: 150px; overflow-y: auto;">
-                                        <!-- Options will be loaded here -->
+                                    <label for="negativeTagInput">标签管理</label>
+                                    <div class="negative-tag-editor">
+                                        <input type="text" id="negativeTagInput" class="text-input" placeholder="输入新标签...">
+                                        <button type="button" id="addNegativeTagBtn" class="btn btn-secondary btn-sm negative-tag-add" title="添加标签" aria-label="添加标签">+</button>
+                                    </div>
+                                    <div id="negativeTagsContainer" class="negative-tags">
                                         <span style="color: var(--text-tertiary);">加载中...</span>
                                     </div>
                                 </div>
                                 <div class="form-group">
-                                    <label>禁止风格</label>
-                                    <div id="negativeStylesContainer" style="display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 4px; max-height: 150px; overflow-y: auto;">
-                                        <!-- Options will be loaded here -->
-                                        <span style="color: var(--text-tertiary);">加载中...</span>
-                                    </div>
+                                    <label for="negativePromptInput">提示词</label>
+                                    <textarea id="negativePromptInput" class="textarea-input" rows="3" placeholder="请输入反向提示词...">水印、签名、文字</textarea>
                                 </div>
                             </div>
                         </div>
@@ -403,6 +412,7 @@
                     <select id="configImageProvider" class="select-input">
                         <option value="gemini">Gemini</option>
                         <option value="openai_images">OpenAI Images</option>
+                        <option value="qwen_image">千问图像</option>
                     </select>
                 </div>
                 <div class="form-group image-config-group" data-provider-config="gemini">
@@ -433,6 +443,21 @@
                 <div class="form-group image-config-group" data-provider-config="openai_images">
                     <label>gpt-image-2 Model</label>
                     <input type="text" id="configOpenAIImageModel" class="text-input" placeholder="gpt-image-2">
+                </div>
+                <div class="form-group image-config-group" data-provider-config="qwen_image">
+                    <label>千问图像 Base URL</label>
+                    <input type="text" id="configQwenImageBaseUrl" class="text-input"
+                        placeholder="https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1">
+                </div>
+                <div class="form-group image-config-group" data-provider-config="qwen_image">
+                    <label>千问图像 API Key</label>
+                    <input type="password" id="configQwenImageApiKey" class="text-input">
+                </div>
+                <div class="form-group image-config-group" data-provider-config="qwen_image">
+                    <label>千问图像 Model</label>
+                    <select id="configQwenImageModel" class="select-input">
+                        <option value="qwen-image-3.0-pro">qwen-image-3.0-pro</option>
+                    </select>
                 </div>
             </div>
             <div class="modal-footer">

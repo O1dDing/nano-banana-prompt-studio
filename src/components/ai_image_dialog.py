@@ -25,10 +25,14 @@ from PyQt6.QtWidgets import (
 )
 
 from utils.ai_config import AIConfigManager
-from components.image_clients import IMAGE_PROVIDER_CAPABILITIES, create_image_provider
+from components.image_clients import (
+    create_image_provider_from_credentials,
+    get_image_provider_capabilities,
+    get_provider_label,
+)
 
 
-class GeminiImageThread(QThread):
+class ImageGenerationThread(QThread):
     """后台线程：调用当前图片生成 provider 生成图片"""
 
     image_ready = pyqtSignal(bytes)
@@ -43,6 +47,7 @@ class GeminiImageThread(QThread):
         image_size: str = "2K",
         thinking_level: str = "low",
         options: Optional[dict] = None,
+        image_config: Optional[dict] = None,
     ):
         super().__init__()
         self.prompt = prompt
@@ -52,19 +57,20 @@ class GeminiImageThread(QThread):
             "image_size": image_size,
             "thinking_level": thinking_level,
         }
+        self.image_config = dict(image_config or AIConfigManager().get_active_image_config())
 
     def run(self):
         try:
             self.progress.emit("正在初始化图片生成客户端...")
-            config_manager = AIConfigManager()
-            full_config = config_manager.load_config()
-            client = create_image_provider(full_config)
+            client = create_image_provider_from_credentials(
+                provider=self.image_config["provider"],
+                base_url=self.image_config["base_url"],
+                api_key=self.image_config["api_key"],
+                model=self.image_config["model"],
+            )
             client.set_generation_options(self.options)
 
-            provider_label = {
-                "gemini": "Gemini",
-                "openai_images": "OpenAI Images",
-            }.get(full_config.get("image_provider", "gemini"), "未知渠道")
+            provider_label = get_provider_label(self.image_config["provider"])
             ref_count = len(self.image_paths) if self.image_paths else 0
             hint = f"，含 {ref_count} 张参考图" if ref_count else ""
             self.progress.emit(f"正在生成图片（{provider_label}{hint}）...")
@@ -264,7 +270,7 @@ class AIImageGenerateDialog(QDialog):
         self.selected_images: List[str] = []
         self.generated_image_bytes: Optional[bytes] = None
         self.generated_pixmap: Optional[QPixmap] = None
-        self.worker_thread: Optional[GeminiImageThread] = None
+        self.worker_thread: Optional[ImageGenerationThread] = None
         self.prompt_text = (default_prompt or "").strip()
 
         self._setup_ui()
@@ -646,7 +652,8 @@ class AIImageGenerateDialog(QDialog):
 
         self.image_option_widgets = {}
         provider = self.config_manager.get_image_provider()
-        provider_config = IMAGE_PROVIDER_CAPABILITIES.get(provider) or IMAGE_PROVIDER_CAPABILITIES["gemini"]
+        model = self.config_manager.get_image_provider_config(provider)["model"]
+        provider_config = get_image_provider_capabilities(provider, model)
         self.provider_status_label.setText(f"当前生图渠道：{provider_config['label']}")
 
         for key, option in provider_config["options"].items():
@@ -667,7 +674,15 @@ class AIImageGenerateDialog(QDialog):
         }
 
     def _update_config_status(self):
-        image_config = self.config_manager.get_active_image_config()
+        try:
+            image_config = self.config_manager.get_active_image_config()
+        except ValueError as exc:
+            self.config_status_label.setText(f"⚠ {exc}")
+            self.config_status_label.setStyleSheet(
+                "font-size: 12px; padding: 4px 12px; border-radius: 12px; "
+                "background-color: #fff1f0; color: #cf1322; font-weight: 500;"
+            )
+            return
         api_key = image_config.get("api_key", "")
         base_url = image_config.get("base_url", "")
         if api_key:
@@ -687,7 +702,8 @@ class AIImageGenerateDialog(QDialog):
     def _open_config_dialog(self):
         from components.ai_dialog import UnifiedAIConfigDialog
 
-        dialog = UnifiedAIConfigDialog(self)
+        provider = self.config_manager.get_image_provider()
+        dialog = UnifiedAIConfigDialog(self, initial_tab="image", image_provider=provider)
         dialog.config_saved.connect(self._update_config_status)
         dialog.config_saved.connect(self._render_image_options)
         dialog.exec()
@@ -758,7 +774,11 @@ class AIImageGenerateDialog(QDialog):
             QMessageBox.warning(self, "提示", "当前提示词为空，请先在主界面填写内容")
             return
 
-        image_config = self.config_manager.get_active_image_config()
+        try:
+            image_config = self.config_manager.get_active_image_config()
+        except ValueError as exc:
+            QMessageBox.warning(self, "图片渠道配置无效", f"{exc}\n请重新选择并保存图片生成渠道。")
+            return
         if not image_config.get("api_key"):
             reply = QMessageBox.question(
                 self,
@@ -779,10 +799,11 @@ class AIImageGenerateDialog(QDialog):
         self._set_generating_state(True)
         self._set_status("提交到图片生成服务", "#1890ff")
 
-        self.worker_thread = GeminiImageThread(
+        self.worker_thread = ImageGenerationThread(
             prompt=prompt,
             image_paths=self.selected_images,
             options=self._collect_image_options(),
+            image_config=image_config,
         )
         self.worker_thread.progress.connect(lambda msg: self._set_status(f"⏳ {msg}", "#1890ff"))
         self.worker_thread.image_ready.connect(self._on_image_ready)

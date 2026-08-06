@@ -35,13 +35,11 @@ from loguru import logger
 from google import genai
 from google.genai import types
 
+from components.image_provider_config import ASPECT_RATIO_LIST, IMAGE_SIZE_LIST, THINKING_LEVEL_LIST
+
 os.environ['NO_PROXY'] = '*'
 os.environ['HTTP_PROXY'] = ''
 os.environ['HTTPS_PROXY'] = ''
-
-ASPECT_RATIO_LIST = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]
-IMAGE_SIZE_LIST = ["1K", "2K", "4K"]
-THINKING_LEVEL_LIST = ["none", "low", "medium", "high"]
 
 
 class GeminiClient:

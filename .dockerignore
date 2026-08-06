@@ -1,0 +1,38 @@
+# Git / IDE
+.git
+.gitignore
+.github
+.vscode
+.idea
+.cursor
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+env
+venv
+.venv
+ENV
+.pytest_cache
+.coverage
+htmlcov
+*.egg-info
+
+# 本地 AI 配置（含 API Key，勿打进镜像）
+src/config/ai_config.yaml
+src/config.yaml
+.env
+.env.*
+
+# 桌面端构建产物（Web 镜像不需要）
+build
+dist
+output
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db

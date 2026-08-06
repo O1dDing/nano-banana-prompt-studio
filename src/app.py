@@ -36,14 +36,59 @@ from components.combo_input import ComboInput
 from components.field_group import FieldGroup
 from components.aspect_ratio_selector import AspectRatioSelector
 from components.multi_select import MultiSelectInput
+from components.tag_text_input import TagTextInput, normalize_negative_prompt
 from utils.yaml_handler import YamlHandler
 from utils.preset_manager import PresetManager
 from utils.resource_path import get_images_dir
 from components.ai_dialog import AIGenerateDialog
-from components.ai_image_dialog import GeminiImageThread
-from components.image_clients import IMAGE_PROVIDER_CAPABILITIES
+from components.ai_image_dialog import ImageGenerationThread
+from components.image_clients import get_image_provider_capabilities
+from components.image_provider_config import IMAGE_PROVIDER_META
 from utils.ai_config import AIConfigManager
 from styles import LIGHT_THEME
+
+
+DEFAULT_NEGATIVE_PROMPT = "水印、签名、文字"
+
+
+CATEGORY_PRESET_PATHS = {
+    "basic": [
+        ("风格模式",),
+        ("画面气质",),
+    ],
+    "scene": [
+        ("场景", "环境", "地点设定"),
+        ("场景", "环境", "光线"),
+        ("场景", "环境", "天气氛围"),
+        ("场景", "背景", "描述"),
+        ("场景", "背景", "景深"),
+    ],
+    "subject": [
+        ("场景", "主体", "整体描述"),
+        ("场景", "主体", "外形特征", "身材"),
+        ("场景", "主体", "外形特征", "面部"),
+        ("场景", "主体", "外形特征", "头发"),
+        ("场景", "主体", "外形特征", "眼睛"),
+        ("场景", "主体", "表情与动作", "情绪"),
+        ("场景", "主体", "表情与动作", "动作"),
+        ("场景", "主体", "服装", "穿着"),
+        ("场景", "主体", "服装", "细节"),
+        ("场景", "主体", "配饰"),
+    ],
+    "camera": [
+        ("相机", "机位角度"),
+        ("相机", "构图"),
+        ("相机", "镜头特性"),
+        ("相机", "传感器画质"),
+    ],
+    "aesthetic": [
+        ("审美控制", "呈现意图"),
+        ("审美控制", "材质真实度"),
+        ("审美控制", "色彩风格", "整体色调"),
+        ("审美控制", "色彩风格", "对比度"),
+        ("审美控制", "色彩风格", "特殊效果"),
+    ],
+}
 
 
 class ClickableLabel(QLabel):
@@ -59,6 +104,41 @@ class ClickableLabel(QLabel):
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
         super().mousePressEvent(event)
+
+
+class ImagePreviewLabel(ClickableLabel):
+    """始终按控件可用区域完整显示原图。"""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self._source_pixmap = QPixmap()
+
+    def setSourcePixmap(self, pixmap: QPixmap):
+        self._source_pixmap = pixmap
+        self._update_scaled_pixmap()
+
+    def clearSourcePixmap(self):
+        self._source_pixmap = QPixmap()
+        self.setPixmap(QPixmap())
+
+    def _update_scaled_pixmap(self):
+        if self._source_pixmap.isNull():
+            return
+
+        available_size = self.contentsRect().size()
+        if available_size.width() <= 0 or available_size.height() <= 0:
+            return
+
+        scaled = self._source_pixmap.scaled(
+            available_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.setPixmap(scaled)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_scaled_pixmap()
 
 
 class ImagePreviewDialog(QDialog):
@@ -162,6 +242,7 @@ class PromptGeneratorApp(QMainWindow):
         self.config_manager = AIConfigManager()
         self.field_widgets = {}  # 存储所有字段的widget引用
         self.current_preset_name = None
+        self.category_preset_selectors = {}
         
         # 生图相关
         self.selected_images = []
@@ -169,6 +250,9 @@ class PromptGeneratorApp(QMainWindow):
         self.generated_image_bytes = None
         self.generated_pixmap = None
         self.worker_thread = None
+        self.image_option_widgets = {}
+        self._active_image_provider = ""
+        self._active_image_model = ""
 
         self._setup_window()
         self._setup_ui()
@@ -350,6 +434,7 @@ class PromptGeneratorApp(QMainWindow):
         basic_group = FieldGroup("基础设置", color_class="basic")
         self._add_field(basic_group, "风格模式", "风格模式")
         self._add_field(basic_group, "画面气质", "画面气质")
+        self._add_category_preset_controls(basic_group, "basic", "基础设置")
         layout.addWidget(basic_group)
 
         # ===== 2. 场景设置 =====
@@ -360,18 +445,19 @@ class PromptGeneratorApp(QMainWindow):
         self._add_field(scene_group, "光线", "光线")
         self._add_field(scene_group, "天气氛围", "天气氛围")
         
-        # 主体整体描述
-        self._add_field(scene_group, "整体描述", "整体描述")
-        
         # 背景
         self._add_field(scene_group, "背景描述", "背景描述")
         self._add_field(scene_group, "景深", "景深")
+        self._add_category_preset_controls(scene_group, "scene", "场景设置")
         
         layout.addWidget(scene_group)
 
         # ===== 3. 主体细节 =====
         subject_group = FieldGroup("主体细节", color_class="subject")
         
+        # 主体整体描述
+        self._add_field(subject_group, "整体描述", "整体描述")
+
         # 外形特征
         self._add_field(subject_group, "身材", "身材")
         self._add_field(subject_group, "面部", "面部")
@@ -386,6 +472,7 @@ class PromptGeneratorApp(QMainWindow):
         self._add_field(subject_group, "穿着", "穿着")
         self._add_field(subject_group, "服装细节", "服装细节")
         self._add_field(subject_group, "配饰", "配饰")
+        self._add_category_preset_controls(subject_group, "subject", "主体细节")
         
         layout.addWidget(subject_group)
 
@@ -395,15 +482,17 @@ class PromptGeneratorApp(QMainWindow):
         self._add_field(camera_group, "构图", "构图")
         self._add_field(camera_group, "镜头特性", "镜头特性")
         self._add_field(camera_group, "传感器画质", "传感器画质")
+        self._add_category_preset_controls(camera_group, "camera", "相机与构图")
         layout.addWidget(camera_group)
 
-        # ===== 5. 审美控制 =====
-        aesthetic_group = FieldGroup("审美控制", color_class="aesthetic")
+        # ===== 5. 调色与质感 =====
+        aesthetic_group = FieldGroup("调色与质感", color_class="aesthetic")
         self._add_field(aesthetic_group, "呈现意图", "呈现意图")
         self._add_field(aesthetic_group, "材质真实度", "材质真实度")
         self._add_field(aesthetic_group, "整体色调", "整体色调")
         self._add_field(aesthetic_group, "对比度", "对比度")
-        self._add_field(aesthetic_group, "特殊效果", "特殊效果")
+        self._add_field(aesthetic_group, "后期效果", "特殊效果")
+        self._add_category_preset_controls(aesthetic_group, "aesthetic", "调色与质感")
         layout.addWidget(aesthetic_group)
 
         # ===== 6. 特别要求（可选） =====
@@ -509,15 +598,22 @@ class PromptGeneratorApp(QMainWindow):
         # 启用开关
         self.negative_prompt_enabled = QCheckBox("启用反向提示词")
         self.negative_prompt_enabled.setObjectName("negativePromptToggle")
-        self.negative_prompt_enabled.setChecked(False)  # 默认不启用
+        self.negative_prompt_enabled.setChecked(True)
         self.negative_prompt_enabled.stateChanged.connect(self._on_negative_toggle_changed)
         negative_layout.addWidget(self.negative_prompt_enabled)
 
         # 反向提示词分组
         self.negative_group = FieldGroup("反向提示词", color_class="negative")
-        self._add_multi_select_field(self.negative_group, "禁止元素", "禁止元素")
-        self._add_multi_select_field(self.negative_group, "禁止风格", "禁止风格")
-        self.negative_group.setVisible(False)  # 默认隐藏
+        negative_tags = self.yaml_handler.get_field_options("反向提示词标签")
+        self.negative_prompt_input = TagTextInput(
+            field_name="反向提示词标签",
+            options=negative_tags,
+            yaml_handler=self.yaml_handler,
+        )
+        self.negative_prompt_input.set_value(DEFAULT_NEGATIVE_PROMPT)
+        self.negative_prompt_input.value_changed.connect(self._on_field_changed)
+        self.negative_group.add_field("提示词", self.negative_prompt_input)
+        self.negative_group.setVisible(True)
         negative_layout.addWidget(self.negative_group)
 
         layout.addWidget(negative_container)
@@ -535,6 +631,135 @@ class PromptGeneratorApp(QMainWindow):
         widget.value_changed.connect(self._on_field_changed)
         group.add_field(label, widget)
         self.field_widgets[field_name] = widget
+
+    def _add_category_preset_controls(
+        self, group: FieldGroup, scope: str, label: str
+    ):
+        """在分类标题中加入预设选择和管理控件。"""
+        selector = QComboBox()
+        selector.setObjectName("categoryPresetSelector")
+        selector.setMinimumWidth(140)
+        selector.setMaximumWidth(190)
+        selector.setToolTip(f"应用{label}预设，仅覆盖本分类")
+        selector.activated.connect(
+            lambda index, s=scope: self._load_category_preset(s, index)
+        )
+        self.category_preset_selectors[scope] = selector
+        group.add_header_widget(selector)
+
+        manage_btn = QPushButton("管理")
+        manage_btn.setObjectName("secondaryButton")
+        manage_btn.setToolTip(f"保存或删除{label}预设")
+        manage_btn.clicked.connect(
+            lambda checked=False, s=scope, l=label, b=manage_btn:
+                self._show_category_preset_menu(s, l, b)
+        )
+        group.add_header_widget(manage_btn)
+        self._refresh_category_preset_selector(scope)
+
+    def _refresh_category_preset_selector(self, scope: str, selected_name: str = ""):
+        selector = self.category_preset_selectors.get(scope)
+        if selector is None:
+            return
+        selector.blockSignals(True)
+        selector.clear()
+        selector.addItem("分类预设...", None)
+        for preset in self.preset_manager.get_category_presets(scope):
+            selector.addItem(preset["name"], preset["name"])
+        if selected_name:
+            index = selector.findData(selected_name)
+            if index >= 0:
+                selector.setCurrentIndex(index)
+        selector.blockSignals(False)
+
+    def _collect_category_preset_data(self, scope: str) -> dict:
+        source = self._collect_form_data()
+        result = {}
+        for path in CATEGORY_PRESET_PATHS.get(scope, []):
+            value = source
+            for key in path:
+                if not isinstance(value, dict) or key not in value:
+                    value = None
+                    break
+                value = value[key]
+            if value is None:
+                continue
+
+            target = result
+            for key in path[:-1]:
+                target = target.setdefault(key, {})
+            target[path[-1]] = value
+        return result
+
+    def _load_category_preset(self, scope: str, index: int):
+        selector = self.category_preset_selectors.get(scope)
+        if selector is None or index <= 0:
+            return
+        name = selector.itemData(index)
+        data = self.preset_manager.load_category_preset(scope, name)
+        if not data:
+            self._show_toast(f"加载分类预设失败: {name}")
+            return
+        self._fill_form_from_data(data)
+        self._show_toast(f"已应用分类预设: {name}")
+
+    def _save_category_preset(self, scope: str, label: str):
+        selector = self.category_preset_selectors.get(scope)
+        default_name = selector.currentData() if selector else ""
+        name, ok = QInputDialog.getText(
+            self, f"保存{label}预设", "请输入预设名称:", text=default_name or ""
+        )
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        data = self._collect_category_preset_data(scope)
+        if self.preset_manager.save_category_preset(scope, name, data):
+            safe_name = self.preset_manager._safe_name(name)
+            self._refresh_category_preset_selector(scope, safe_name)
+            self._show_toast(f"{label}预设已保存: {safe_name}")
+        else:
+            self._show_toast(f"保存{label}预设失败")
+
+    def _show_category_preset_menu(
+        self, scope: str, label: str, anchor: QWidget
+    ):
+        menu = QMenu(self)
+        save_action = QAction("保存当前分类", self)
+        save_action.triggered.connect(
+            lambda checked=False: self._save_category_preset(scope, label)
+        )
+        menu.addAction(save_action)
+
+        presets = self.preset_manager.get_category_presets(scope)
+        delete_menu = menu.addMenu("删除分类预设")
+        if presets:
+            for preset in presets:
+                action = QAction(preset["name"], self)
+                action.triggered.connect(
+                    lambda checked=False, n=preset["name"]:
+                        self._delete_category_preset(scope, label, n)
+                )
+                delete_menu.addAction(action)
+        else:
+            empty_action = QAction("(暂无预设)", self)
+            empty_action.setEnabled(False)
+            delete_menu.addAction(empty_action)
+        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+
+    def _delete_category_preset(self, scope: str, label: str, name: str):
+        reply = QMessageBox.question(
+            self,
+            "确认删除",
+            f"确定要删除{label}预设「{name}」吗?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        if self.preset_manager.delete_category_preset(scope, name):
+            self._refresh_category_preset_selector(scope)
+            self._show_toast(f"已删除分类预设: {name}")
+        else:
+            self._show_toast(f"删除分类预设失败: {name}")
 
     def _add_multi_select_field(self, group: FieldGroup, label: str, field_name: str):
         """添加一个多选字段到分组"""
@@ -614,20 +839,32 @@ class PromptGeneratorApp(QMainWindow):
         param_layout.setContentsMargins(16, 12, 16, 12)
         param_layout.setSpacing(12)
 
-        self.image_provider_label = QLabel()
-        self.image_provider_label.setStyleSheet(
-            "font-size: 12px; color: #0958d9; background-color: #e6f7ff; "
-            "border: 1px solid #91d5ff; border-radius: 6px; padding: 6px 10px;"
-        )
-        param_layout.addWidget(self.image_provider_label)
+        provider_row = QWidget()
+        provider_layout = QHBoxLayout(provider_row)
+        provider_layout.setContentsMargins(0, 0, 0, 0)
+        provider_layout.setSpacing(8)
 
-        self.image_option_widgets = {}
+        provider_layout.addWidget(QLabel("渠道"))
+        self.image_provider_combo = QComboBox()
+        for provider_id, meta in IMAGE_PROVIDER_META.items():
+            self.image_provider_combo.addItem(meta["label"], provider_id)
+        provider_layout.addWidget(self.image_provider_combo, 1)
+
+        provider_layout.addWidget(QLabel("模型"))
+        self.image_model_combo = QComboBox()
+        self.image_model_combo.setEditable(False)
+        provider_layout.addWidget(self.image_model_combo, 2)
+
+        self.image_config_status = QLabel()
+        provider_layout.addWidget(self.image_config_status)
+        param_layout.addWidget(provider_row)
+
         self.image_options_container = QWidget()
         self.image_options_layout = QVBoxLayout(self.image_options_container)
         self.image_options_layout.setContentsMargins(0, 0, 0, 0)
         self.image_options_layout.setSpacing(8)
         param_layout.addWidget(self.image_options_container)
-        self._render_image_options()
+        self._load_image_generation_controls()
 
         # 参考图片区域：合并到参数设置中
         img_row = QWidget()
@@ -686,9 +923,9 @@ class PromptGeneratorApp(QMainWindow):
         canvas_layout = QVBoxLayout(preview_canvas)
         canvas_layout.setContentsMargins(16, 16, 16, 16)
 
-        self.preview_area = ClickableLabel("图片生成后会显示在这里")
+        self.preview_area = ImagePreviewLabel("图片生成后会显示在这里")
         self.preview_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_area.setMinimumHeight(300)
+        self.preview_area.setMinimumHeight(120)
         self.preview_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.preview_area.setStyleSheet("color: #bfbfbf; font-size: 13px; border: none;")
         # 禁用自动缩放，使用手动缩放以保持宽高比
@@ -739,8 +976,71 @@ class PromptGeneratorApp(QMainWindow):
 
         return container
 
-    def _render_image_options(self):
-        """根据当前图片 provider 渲染主窗口生图参数"""
+    def _load_image_generation_controls(self):
+        """从配置加载主界面的当前生图渠道与模型。"""
+        provider = self.config_manager.get_image_provider()
+        index = self.image_provider_combo.findData(provider)
+        self.image_provider_combo.blockSignals(True)
+        self.image_provider_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.image_provider_combo.blockSignals(False)
+        self._populate_image_models(provider)
+        model = self.image_model_combo.currentText()
+        self.config_manager.set_active_image_selection(provider, model)
+        self._render_image_options(provider, model)
+        self.image_provider_combo.currentIndexChanged.connect(self._on_image_provider_changed)
+        self.image_model_combo.currentIndexChanged.connect(self._on_image_model_changed)
+
+    def _populate_image_models(self, provider: str, preferred_model: str = ""):
+        meta = IMAGE_PROVIDER_META.get(provider) or IMAGE_PROVIDER_META["gemini"]
+        configured_model = self.config_manager.get_image_provider_config(provider)["model"]
+        model = preferred_model or configured_model or meta.get("default_model") or ""
+        models = list(meta.get("model_suggestions") or [])
+        if model and model not in models:
+            models.append(model)
+        self.image_model_combo.blockSignals(True)
+        self.image_model_combo.clear()
+        self.image_model_combo.addItems(models)
+        self.image_model_combo.setCurrentText(model)
+        self.image_model_combo.blockSignals(False)
+
+    def _cache_current_image_options(self):
+        if not self._active_image_provider or not self.image_option_widgets:
+            return
+        self.config_manager.save_image_generation_options(
+            self._active_image_provider,
+            self._active_image_model,
+            self._collect_image_options(),
+        )
+
+    def _on_image_provider_changed(self, *_args):
+        self._cache_current_image_options()
+        provider = self.image_provider_combo.currentData() or "gemini"
+        self._populate_image_models(provider)
+        model = self.image_model_combo.currentText().strip()
+        self.config_manager.set_active_image_selection(provider, model)
+        self._render_image_options(provider, model, cache_current=False)
+
+    def _on_image_model_changed(self, *_args):
+        provider = self.image_provider_combo.currentData() or "gemini"
+        model = self.image_model_combo.currentText().strip()
+        if provider == self._active_image_provider and model == self._active_image_model:
+            return
+        self._cache_current_image_options()
+        self.config_manager.set_active_image_selection(provider, model)
+        self._render_image_options(provider, model, cache_current=False)
+
+    def _on_image_option_changed(self, *_args):
+        self._cache_current_image_options()
+
+    def _render_image_options(
+        self,
+        provider: str | None = None,
+        model: str | None = None,
+        cache_current: bool = True,
+    ):
+        """根据主界面的 provider/model 渲染并恢复生图参数。"""
+        if cache_current:
+            self._cache_current_image_options()
         while self.image_options_layout.count():
             item = self.image_options_layout.takeAt(0)
             widget = item.widget()
@@ -748,19 +1048,40 @@ class PromptGeneratorApp(QMainWindow):
                 widget.deleteLater()
 
         self.image_option_widgets = {}
-        provider = self.config_manager.get_image_provider()
-        provider_config = IMAGE_PROVIDER_CAPABILITIES.get(provider) or IMAGE_PROVIDER_CAPABILITIES["gemini"]
-        self.image_provider_label.setText(f"当前生图渠道：{provider_config['label']}")
+        provider = provider or self.image_provider_combo.currentData() or "gemini"
+        model = (model if model is not None else self.image_model_combo.currentText()).strip()
+        self._active_image_provider = provider
+        self._active_image_model = model
+        provider_config = get_image_provider_capabilities(provider, model)
+        saved_options = self.config_manager.get_image_generation_options(provider, model)
 
         for key, option in provider_config["options"].items():
+            value = saved_options.get(key, option.get("default"))
+            if value not in option.get("values", []):
+                value = option.get("default")
             container = self._create_param_row(
                 option["label"],
                 option.get("values", []),
-                default=option.get("default"),
+                default=value,
             )
             combo = container.findChild(QComboBox)
+            combo.currentTextChanged.connect(self._on_image_option_changed)
             self.image_option_widgets[key] = combo
             self.image_options_layout.addWidget(container)
+        self._update_image_config_status()
+
+    def _update_image_config_status(self):
+        provider = self.image_provider_combo.currentData() or "gemini"
+        configured = self.config_manager.is_image_provider_configured(provider)
+        if configured:
+            self.image_config_status.setText("已配置")
+            self.image_config_status.setStyleSheet("color: #389e0d; font-size: 12px;")
+        else:
+            self.image_config_status.setText("未配置")
+            self.image_config_status.setStyleSheet("color: #cf1322; font-size: 12px;")
+        if hasattr(self, "generate_image_btn"):
+            generating = bool(self.worker_thread and self.worker_thread.isRunning())
+            self.generate_image_btn.setEnabled(configured and not generating)
 
     def _collect_image_options(self) -> dict:
         """收集当前 provider 的生图参数"""
@@ -807,6 +1128,7 @@ class PromptGeneratorApp(QMainWindow):
         self.generate_image_btn.setObjectName("primaryButton")
         self.generate_image_btn.clicked.connect(self._on_generate_image_clicked)
         layout.addWidget(self.generate_image_btn)
+        self._update_image_config_status()
 
         return bar
 
@@ -890,11 +1212,6 @@ class PromptGeneratorApp(QMainWindow):
         material_value = get_value("材质真实度")
         materials = [m.strip() for m in material_value.split(",") if m.strip()] if material_value else []
 
-        # 收集禁止元素列表（多选）
-        forbidden_elements = self.field_widgets.get("禁止元素").get_value() if "禁止元素" in self.field_widgets else []
-
-        # 收集禁止风格列表（多选）
-        forbidden_styles = self.field_widgets.get("禁止风格").get_value() if "禁止风格" in self.field_widgets else []
 
         # 按照新的分类顺序组织数据
         data = {
@@ -952,10 +1269,7 @@ class PromptGeneratorApp(QMainWindow):
 
         # 仅当启用反向提示词时才添加
         if self.negative_prompt_enabled.isChecked():
-            data["反向提示词"] = {
-                "禁止元素": forbidden_elements,
-                "禁止风格": forbidden_styles,
-            }
+            data["反向提示词"] = self.negative_prompt_input.get_value()
 
         return data
 
@@ -1053,16 +1367,6 @@ class PromptGeneratorApp(QMainWindow):
                 if value is not _MISSING:
                     self.field_widgets[field_name].set_value("" if value is None else value)
 
-        # 多选字段需要传入列表；缺失键不覆盖
-        multi_select_fields = {
-            "禁止元素": lambda d: _get(d, "反向提示词", "禁止元素"),
-            "禁止风格": lambda d: _get(d, "反向提示词", "禁止风格"),
-        }
-        for field_name, getter in multi_select_fields.items():
-            if field_name in self.field_widgets:
-                value = getter(data)
-                if value is not _MISSING:
-                    self.field_widgets[field_name].set_value(value if value else [])
 
         # 处理画幅设置开关状态；仅当预设提供该块时覆盖
         aspect_data = data.get("画幅设置", _MISSING)
@@ -1081,10 +1385,10 @@ class PromptGeneratorApp(QMainWindow):
 
         # 处理反向提示词开关状态；仅当预设提供该块时覆盖
         negative_data = data.get("反向提示词", _MISSING)
-        if negative_data is not _MISSING and isinstance(negative_data, dict):
-            has_negative = bool(
-                negative_data.get("禁止元素") or negative_data.get("禁止风格")
-            )
+        if negative_data is not _MISSING:
+            negative_text = normalize_negative_prompt(negative_data)
+            self.negative_prompt_input.set_value(negative_text)
+            has_negative = bool(negative_text)
             self.negative_prompt_enabled.setChecked(has_negative)
             self.negative_group.setVisible(has_negative)
 
@@ -1337,7 +1641,13 @@ class PromptGeneratorApp(QMainWindow):
                 if special_text:
                     prompt_text = prompt_text + "\n\n特别要求：" + special_text
 
-        image_config = self.config_manager.get_active_image_config()
+        try:
+            provider = self.image_provider_combo.currentData() or "gemini"
+            model = self.image_model_combo.currentText().strip()
+            image_config = self.config_manager.get_active_image_config(provider, model)
+        except ValueError as exc:
+            QMessageBox.warning(self, "图片渠道配置无效", f"{exc}\n请重新选择并保存图片生成渠道。")
+            return
         if not image_config.get("api_key"):
             reply = QMessageBox.question(
                 self,
@@ -1356,7 +1666,7 @@ class PromptGeneratorApp(QMainWindow):
         self.generated_image_bytes = None
         self.generated_pixmap = None
         self.preview_area.setText("正在生成，请稍候...")
-        self.preview_area.setPixmap(QPixmap())
+        self.preview_area.clearSourcePixmap()
         self.save_image_btn.setEnabled(False)
         
         # 根据模式显示不同的状态信息
@@ -1367,10 +1677,11 @@ class PromptGeneratorApp(QMainWindow):
         # 禁用点击预览功能
         self._enable_image_preview(False)
 
-        self.worker_thread = GeminiImageThread(
+        self.worker_thread = ImageGenerationThread(
             prompt=prompt_text,
             image_paths=self.selected_images,
             options=self._collect_image_options(),
+            image_config=image_config,
         )
         self.worker_thread.progress.connect(lambda msg: self._set_image_status(f"⏳ {msg}", "#1890ff"))
         self.worker_thread.image_ready.connect(self._on_image_ready)
@@ -1405,13 +1716,18 @@ class PromptGeneratorApp(QMainWindow):
 
     def _set_image_generating_state(self, generating: bool):
         """设置生成状态"""
+        self.image_provider_combo.setEnabled(not generating)
+        self.image_model_combo.setEnabled(not generating)
         for combo in self.image_option_widgets.values():
             combo.setEnabled(not generating)
         self.add_image_btn.setEnabled(not generating)
         # 禁用所有图片按钮
         for btn in self.image_buttons:
             btn.setEnabled(not generating)
-        self.generate_image_btn.setEnabled(not generating)
+        if generating:
+            self.generate_image_btn.setEnabled(False)
+        else:
+            self._update_image_config_status()
 
     def _save_image(self):
         """保存图片"""
@@ -1444,40 +1760,35 @@ class PromptGeneratorApp(QMainWindow):
     def _open_ai_config_dialog(self):
         """打开统一的AI配置对话框"""
         from components.ai_dialog import UnifiedAIConfigDialog
-        dialog = UnifiedAIConfigDialog(self)
-        dialog.config_saved.connect(self._render_image_options)
+        dialog = UnifiedAIConfigDialog(self, initial_tab="chat")
+        dialog.config_saved.connect(self._refresh_image_config_from_dialog)
         dialog.exec()
     
     def _open_image_config_dialog(self):
-        """打开配置对话框（已废弃，保留以兼容）"""
+        """打开当前图片渠道的连接配置。"""
         from components.ai_dialog import UnifiedAIConfigDialog
-        dialog = UnifiedAIConfigDialog(self)
-        dialog.config_saved.connect(self._render_image_options)
+        provider = self.image_provider_combo.currentData() or "gemini"
+        dialog = UnifiedAIConfigDialog(self, initial_tab="image", image_provider=provider)
+        dialog.config_saved.connect(self._refresh_image_config_from_dialog)
         dialog.exec()
+
+    def _refresh_image_config_from_dialog(self):
+        provider = self.image_provider_combo.currentData() or "gemini"
+        self._cache_current_image_options()
+        self._populate_image_models(provider)
+        model = self.image_model_combo.currentText().strip()
+        self.config_manager.set_active_image_selection(provider, model)
+        self._render_image_options(provider, model, cache_current=False)
 
     def _refresh_preview_pixmap(self):
         """刷新预览图片"""
         if not self.generated_pixmap:
-            self.preview_area.setPixmap(QPixmap())
+            self.preview_area.clearSourcePixmap()
             self.preview_area.setScaledContents(False)
             return
-        
-        # 获取预览区域的实际可用尺寸
-        preview_size = self.preview_area.size()
-        if preview_size.width() <= 0 or preview_size.height() <= 0:
-            # 如果尺寸还未确定，先设置原始图片
-            self.preview_area.setPixmap(self.generated_pixmap)
-            return
-        
-        # 直接使用 QPixmap.scaled() 方法，保持宽高比，确保图片完整显示
-        scaled = self.generated_pixmap.scaled(
-            preview_size,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        
-        self.preview_area.setPixmap(scaled)
-        self.preview_area.setScaledContents(False)  # 禁用自动缩放，使用手动缩放
+
+        self.preview_area.setSourcePixmap(self.generated_pixmap)
+        self.preview_area.setScaledContents(False)
     
     def _enable_image_preview(self, enabled: bool):
         """启用/禁用图片预览功能"""
@@ -1554,9 +1865,10 @@ class PromptGeneratorApp(QMainWindow):
             # 重置画幅设置开关
             self.aspect_enabled.setChecked(False)
             self.aspect_group.setVisible(False)
-            # 重置反向提示词开关
-            self.negative_prompt_enabled.setChecked(False)
-            self.negative_group.setVisible(False)
+            # 恢复默认反向提示词
+            self.negative_prompt_enabled.setChecked(True)
+            self.negative_group.setVisible(True)
+            self.negative_prompt_input.set_value(DEFAULT_NEGATIVE_PROMPT)
             # 重置特别要求开关
             self.special_requirement_enabled.setChecked(False)
             self.special_requirement_group.setVisible(False)
@@ -1568,7 +1880,7 @@ class PromptGeneratorApp(QMainWindow):
             self.generated_pixmap = None
             if hasattr(self, 'preview_area'):
                 self.preview_area.setText("图片生成后会显示在这里")
-                self.preview_area.setPixmap(QPixmap())
+                self.preview_area.clearSourcePixmap()
             if hasattr(self, 'save_image_btn'):
                 self.save_image_btn.setEnabled(False)
             if hasattr(self, 'image_status_label'):

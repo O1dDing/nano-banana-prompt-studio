@@ -18,6 +18,7 @@ from utils.yaml_handler import YamlHandler
 from utils.preset_manager import PresetManager
 from utils.ai_config import AIConfigManager
 from components.image_clients import IMAGE_PROVIDER_CAPABILITIES, create_image_provider
+from components.image_provider_config import IMAGE_PROVIDER_META
 
 
 app = Flask(__name__, static_folder='static')
@@ -27,6 +28,7 @@ CORS(app)
 yaml_handler = YamlHandler()
 preset_manager = PresetManager()
 config_manager = AIConfigManager()
+CATEGORY_PRESET_SCOPES = {"basic", "scene", "subject", "camera", "aesthetic"}
 
 
 @app.route('/')
@@ -55,13 +57,63 @@ def get_config():
             'gemini_model': config.get('gemini_model', ''),
             'openai_image_base_url': config.get('openai_image_base_url', ''),
             'openai_image_model': config.get('openai_image_model', ''),
+            'qwen_image_base_url': config.get('qwen_image_base_url', ''),
+            'qwen_image_model': config.get('qwen_image_model', ''),
             'has_api_key': bool(config.get('api_key')),
             'has_gemini_api_key': bool(config.get('gemini_api_key')),
-            'has_openai_image_api_key': bool(config.get('openai_image_api_key'))
+            'has_openai_image_api_key': bool(config.get('openai_image_api_key')),
+            'has_qwen_image_api_key': bool(config.get('qwen_image_api_key')),
         }
         return jsonify(safe_config)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/category-presets/<scope>', methods=['GET'])
+def get_category_presets(scope):
+    """获取一个配置分类下的全部预设。"""
+    if scope not in CATEGORY_PRESET_SCOPES:
+        return jsonify({'error': '未知的预设分类'}), 404
+    presets = preset_manager.get_category_presets(scope)
+    for preset in presets:
+        preset['modified_time'] = preset['modified_time'].isoformat()
+    return jsonify(presets)
+
+
+@app.route('/api/category-presets/<scope>/<name>', methods=['GET'])
+def get_category_preset(scope, name):
+    """获取指定分类预设。"""
+    if scope not in CATEGORY_PRESET_SCOPES:
+        return jsonify({'error': '未知的预设分类'}), 404
+    preset = preset_manager.load_category_preset(scope, name)
+    if preset is None:
+        return jsonify({'error': '分类预设不存在'}), 404
+    return jsonify(preset)
+
+
+@app.route('/api/category-presets/<scope>', methods=['POST'])
+def save_category_preset(scope):
+    """保存当前配置分类。"""
+    if scope not in CATEGORY_PRESET_SCOPES:
+        return jsonify({'error': '未知的预设分类'}), 404
+    payload = request.json or {}
+    name = payload.get('name')
+    preset_data = payload.get('data')
+    if not name or not isinstance(preset_data, dict):
+        return jsonify({'error': '名称和分类数据不能为空'}), 400
+    if preset_manager.save_category_preset(scope, name, preset_data):
+        return jsonify({'success': True})
+    return jsonify({'error': '保存失败'}), 500
+
+
+@app.route('/api/category-presets/<scope>/<name>', methods=['DELETE'])
+def delete_category_preset(scope, name):
+    """删除指定分类预设。"""
+    if scope not in CATEGORY_PRESET_SCOPES:
+        return jsonify({'error': '未知的预设分类'}), 404
+    if preset_manager.delete_category_preset(scope, name):
+        return jsonify({'success': True})
+    return jsonify({'error': '删除失败'}), 404
 
 
 @app.route('/api/config', methods=['POST'])
@@ -69,6 +121,11 @@ def update_config():
     """更新AI配置"""
     try:
         data = request.json
+        if not isinstance(data, dict):
+            return jsonify({'error': '请求体必须是 JSON 对象'}), 400
+        if 'image_provider' in data and data['image_provider'] not in IMAGE_PROVIDER_META:
+            return jsonify({'error': f"未知图片生成渠道: {data['image_provider']}"}), 400
+
         config = config_manager.load_config()
         
         # 更新配置
@@ -92,8 +149,15 @@ def update_config():
             config['openai_image_api_key'] = data['openai_image_api_key']
         if 'openai_image_model' in data:
             config['openai_image_model'] = data['openai_image_model']
+        if 'qwen_image_base_url' in data:
+            config['qwen_image_base_url'] = data['qwen_image_base_url']
+        if 'qwen_image_api_key' in data:
+            config['qwen_image_api_key'] = data['qwen_image_api_key']
+        if 'qwen_image_model' in data:
+            config['qwen_image_model'] = data['qwen_image_model']
         
-        config_manager.save_config(config)
+        if not config_manager.save_config(config):
+            return jsonify({'error': '配置写入失败'}), 500
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -133,6 +197,20 @@ def add_option(field_name):
         value = data.get('value')
         if value:
             yaml_handler.add_option(field_name, value)
+            return jsonify({'success': True})
+        return jsonify({'error': '值不能为空'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/options/<field_name>', methods=['DELETE'])
+def delete_option(field_name):
+    """删除选项"""
+    try:
+        data = request.get_json(silent=True) or {}
+        value = data.get('value')
+        if value:
+            yaml_handler.remove_option(field_name, value)
             return jsonify({'success': True})
         return jsonify({'error': '值不能为空'}), 400
     except Exception as e:

@@ -1,0 +1,3 @@
+# The repository currently uses CRLF working files on Windows. Treat the CR as
+# part of the line ending so whitespace checks still catch real trailing spaces.
+* whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

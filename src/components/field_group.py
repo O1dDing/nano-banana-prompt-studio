@@ -2,6 +2,7 @@
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QLabel,
     QFrame,
 )
@@ -24,14 +25,21 @@ class FieldGroup(QFrame):
         layout.setContentsMargins(16, 12, 16, 16)
         layout.setSpacing(12)
 
-        # 标题
+        # 标题栏
+        self.header_widget = QWidget()
+        self.header_layout = QHBoxLayout(self.header_widget)
+        self.header_layout.setContentsMargins(0, 0, 0, 0)
+        self.header_layout.setSpacing(8)
+
         title_label = QLabel(self.title)
         # 如果指定了颜色类，使用特定的objectName
         if self.color_class:
             title_label.setObjectName(f"groupTitle_{self.color_class}")
         else:
             title_label.setObjectName("groupTitle")
-        layout.addWidget(title_label)
+        self.header_layout.addWidget(title_label)
+        self.header_layout.addStretch()
+        layout.addWidget(self.header_widget)
 
         # 内容容器
         self.content_widget = QWidget()
@@ -58,3 +66,6 @@ class FieldGroup(QFrame):
         """直接添加一个widget"""
         self.content_layout.addWidget(widget)
 
+    def add_header_widget(self, widget: QWidget):
+        """在分组标题右侧添加紧凑操作控件。"""
+        self.header_layout.addWidget(widget)

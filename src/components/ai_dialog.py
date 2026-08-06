@@ -21,12 +21,14 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QScrollArea,
     QComboBox,
+    QTabWidget,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QIcon, QPixmap
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QAction, QFont, QIcon, QPixmap
 
 from utils.ai_config import AIConfigManager
 from utils.ai_service import AIService
+from components.image_provider_config import IMAGE_PROVIDER_META
 
 
 class AIConfigDialog(QDialog):
@@ -196,13 +198,17 @@ class AIConfigDialog(QDialog):
 
 
 class UnifiedAIConfigDialog(QDialog):
-    """统一的AI配置对话框 - 包含提示词生成和图片生成两个AI的配置"""
+    """分别管理 AI 对话和图片生成连接配置。"""
     
     config_saved = pyqtSignal()
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, initial_tab: str = "chat", image_provider: str | None = None):
         super().__init__(parent)
         self.config_manager = AIConfigManager()
+        self._image_config_drafts = {}
+        self._current_image_provider = None
+        self._initial_tab = initial_tab
+        self._requested_image_provider = image_provider
         self._setup_ui()
         self._load_config()
     
@@ -266,16 +272,11 @@ class UnifiedAIConfigDialog(QDialog):
         title.setStyleSheet("font-size: 20px; font-weight: 700; color: #262626;")
         layout.addWidget(title)
         
-        # 使用滚动区域以支持更多内容
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
-        
-        content_widget = QWidget()
-        content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(20)
+        description = QLabel("对话模型与图片生成渠道完全独立，配置不会互相复用。")
+        description.setStyleSheet("color: #8c8c8c; font-size: 12px;")
+        layout.addWidget(description)
+
+        self.config_tabs = QTabWidget()
         
         # ===== 第一部分：提示词生成/修改AI配置 =====
         prompt_frame = QFrame()
@@ -317,7 +318,11 @@ class UnifiedAIConfigDialog(QDialog):
         prompt_layout.addWidget(self._build_labeled_widget("API Key", self._create_key_input("prompt")))
         prompt_layout.addWidget(self._build_labeled_widget("模型名称", self._create_model_input("prompt")))
         
-        content_layout.addWidget(prompt_frame)
+        prompt_hint = QLabel("用于 AI 生成/修改提示词，采用 OpenAI-compatible 接口。")
+        prompt_hint.setWordWrap(True)
+        prompt_hint.setStyleSheet("color: #595959; font-size: 12px;")
+        prompt_layout.insertWidget(1, prompt_hint)
+        self.config_tabs.addTab(prompt_frame, "AI 对话")
         
         # ===== 第二部分：图片生成AI配置 =====
         image_frame = QFrame()
@@ -355,20 +360,79 @@ class UnifiedAIConfigDialog(QDialog):
         
         image_layout.addWidget(image_title_container)
         
-        self.image_provider_input = QComboBox()
-        self.image_provider_input.addItem("Gemini", "gemini")
-        self.image_provider_input.addItem("OpenAI Images", "openai_images")
-        self.image_provider_input.currentIndexChanged.connect(self._on_image_provider_changed)
-        image_layout.addWidget(self._build_labeled_widget("图片生成渠道", self.image_provider_input))
-        image_layout.addWidget(self._build_labeled_widget("Base URL", self._create_url_input("image")))
-        image_layout.addWidget(self._build_labeled_widget("API Key", self._create_key_input("image")))
-        image_layout.addWidget(self._build_labeled_widget("模型名称", self._create_model_input("image")))
-        
-        content_layout.addWidget(image_frame)
-        
-        content_layout.addStretch()
-        scroll.setWidget(content_widget)
-        layout.addWidget(scroll, 1)
+        image_config_body = QWidget()
+        image_config_body_layout = QHBoxLayout(image_config_body)
+        image_config_body_layout.setContentsMargins(0, 0, 0, 0)
+        image_config_body_layout.setSpacing(16)
+
+        provider_nav = QWidget()
+        provider_nav.setFixedWidth(190)
+        provider_nav_layout = QVBoxLayout(provider_nav)
+        provider_nav_layout.setContentsMargins(0, 0, 0, 0)
+        provider_nav_layout.setSpacing(8)
+
+        provider_nav_title = QLabel("图片渠道")
+        provider_nav_title.setStyleSheet(
+            "font-size: 12px; font-weight: 600; color: #8c8c8c; padding-left: 4px;"
+        )
+        provider_nav_layout.addWidget(provider_nav_title)
+
+        self.image_provider_input = QListWidget()
+        self.image_provider_input.setSpacing(6)
+        self.image_provider_input.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.image_provider_input.setStyleSheet("""
+            QListWidget {
+                background: transparent;
+                border: none;
+                outline: none;
+                padding: 0;
+            }
+            QListWidget::item {
+                background-color: #ffffff;
+                border: 1px solid #e8e8e8;
+                border-radius: 8px;
+                color: #595959;
+                padding: 9px 12px;
+            }
+            QListWidget::item:hover {
+                background-color: #fffaf0;
+                border-color: #ffc069;
+            }
+            QListWidget::item:selected {
+                background-color: #fff7e6;
+                border: 1px solid #fa8c16;
+                color: #d46b08;
+                font-weight: 600;
+            }
+        """)
+        for provider_id, meta in IMAGE_PROVIDER_META.items():
+            item = QListWidgetItem(meta["label"])
+            item.setSizeHint(QSize(0, 54))
+            item.setData(Qt.ItemDataRole.UserRole, provider_id)
+            self.image_provider_input.addItem(item)
+        self.image_provider_input.currentRowChanged.connect(self._on_image_provider_changed)
+        provider_nav_layout.addWidget(self.image_provider_input, 1)
+        image_config_body_layout.addWidget(provider_nav)
+
+        image_fields = QWidget()
+        image_fields_layout = QVBoxLayout(image_fields)
+        image_fields_layout.setContentsMargins(0, 0, 0, 0)
+        image_fields_layout.setSpacing(16)
+        image_fields_layout.addWidget(self._build_labeled_widget("Base URL", self._create_url_input("image")))
+        image_fields_layout.addWidget(self._build_labeled_widget("API Key", self._create_key_input("image")))
+        image_fields_layout.addWidget(self._build_labeled_widget("模型名称", self._create_model_input("image")))
+        image_config_body_layout.addWidget(image_fields, 1)
+        image_layout.addWidget(image_config_body, 1)
+
+        image_hint = QLabel("这里只管理各图片渠道的连接信息；当前使用渠道请在主界面切换。")
+        image_hint.setWordWrap(True)
+        image_hint.setStyleSheet("color: #595959; font-size: 12px;")
+        image_layout.insertWidget(1, image_hint)
+        self.config_tabs.addTab(image_frame, "图片生成")
+        layout.addWidget(self.config_tabs, 1)
+        self.config_tabs.setCurrentIndex(1 if self._initial_tab == "image" else 0)
         
         # 按钮行
         btn_row = QHBoxLayout()
@@ -399,14 +463,25 @@ class UnifiedAIConfigDialog(QDialog):
     
     def _create_key_input(self, prefix: str) -> QWidget:
         """创建API Key输入框"""
-        widget = QTextEdit()
-        widget.setFixedHeight(70)
+        widget = QLineEdit()
+        widget.setEchoMode(QLineEdit.EchoMode.Password)
         widget.setPlaceholderText("sk-...")
+        toggle_action = QAction("显示", widget)
+        widget.addAction(toggle_action, QLineEdit.ActionPosition.TrailingPosition)
+        toggle_action.triggered.connect(
+            lambda _checked=False, field=widget, action=toggle_action: self._toggle_secret(field, action)
+        )
         if prefix == "prompt":
             self.prompt_key_input = widget
         else:
             self.image_key_input = widget
         return widget
+
+    @staticmethod
+    def _toggle_secret(field: QLineEdit, action) -> None:
+        visible = field.echoMode() == QLineEdit.EchoMode.Password
+        field.setEchoMode(QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password)
+        action.setText("隐藏" if visible else "显示")
     
     def _create_model_input(self, prefix: str) -> QWidget:
         """创建模型输入框"""
@@ -417,11 +492,17 @@ class UnifiedAIConfigDialog(QDialog):
         else:
             widget = QComboBox()
             widget.setEditable(True)
-            widget.addItems([
-                "gemini-3-pro-image-preview",
-                "gemini-3.1-flash-image-preview",
-                "gpt-image-2",
-            ])
+            suggestions = []
+            for meta in IMAGE_PROVIDER_META.values():
+                suggestions.extend(meta.get("model_suggestions") or [])
+            # 去重并保持顺序
+            seen = set()
+            ordered = []
+            for name in suggestions:
+                if name not in seen:
+                    seen.add(name)
+                    ordered.append(name)
+            widget.addItems(ordered)
             self.image_model_input = widget
         return widget
     
@@ -442,6 +523,11 @@ class UnifiedAIConfigDialog(QDialog):
         """加载现有配置"""
         config = self.config_manager.load_config()
         self._image_config_cache = config
+        self._image_config_drafts = {}
+        for provider_id in IMAGE_PROVIDER_META:
+            self._image_config_drafts[provider_id] = (
+                self.config_manager.get_image_provider_config(provider_id)
+            )
         
         # 提示词生成AI配置 - 只在配置存在且非空时设置文本，否则使用placeholder
         base_url = config.get("base_url", "")
@@ -450,75 +536,114 @@ class UnifiedAIConfigDialog(QDialog):
         
         api_key = config.get("api_key", "")
         if api_key:
-            self.prompt_key_input.setPlainText(api_key)
+            self.prompt_key_input.setText(api_key)
         
         model = config.get("model", "")
         if model:
             self.prompt_model_input.setText(model)
         
-        provider = config.get("image_provider", "") or "gemini"
-        index = self.image_provider_input.findData(provider)
-        self.image_provider_input.setCurrentIndex(index if index >= 0 else 0)
+        provider = self._requested_image_provider or config.get("image_provider", "") or "gemini"
+        self._refresh_provider_labels()
+        selected_row = 0
+        for index in range(self.image_provider_input.count()):
+            if self.image_provider_input.item(index).data(Qt.ItemDataRole.UserRole) == provider:
+                selected_row = index
+                break
+        self.image_provider_input.setCurrentRow(selected_row)
         self._on_image_provider_changed()
 
-    def _on_image_provider_changed(self):
+    def _refresh_provider_labels(self) -> None:
+        for index in range(self.image_provider_input.count()):
+            item = self.image_provider_input.item(index)
+            provider = item.data(Qt.ItemDataRole.UserRole)
+            meta = IMAGE_PROVIDER_META[provider]
+            draft = self._image_config_drafts.get(provider, {})
+            configured = all(draft.get(key) for key in ("base_url", "api_key", "model"))
+            status = "✓ 已配置" if configured else "未配置"
+            item.setText(f"{meta['label']}\n{status}")
+
+    def _on_image_provider_changed(self, _row: int = -1):
         """根据当前图片 provider 加载对应配置。"""
-        config = getattr(self, "_image_config_cache", None) or self.config_manager.load_config()
-        provider = self.image_provider_input.currentData() or "gemini"
+        current_item = self.image_provider_input.currentItem()
+        provider = (
+            current_item.data(Qt.ItemDataRole.UserRole)
+            if current_item is not None
+            else "gemini"
+        )
+        meta = IMAGE_PROVIDER_META.get(provider) or IMAGE_PROVIDER_META["gemini"]
 
-        if provider == "openai_images":
-            self.image_url_input.setPlaceholderText("https://api.openai.com/v1")
-            self.image_url_input.setText(config.get("openai_image_base_url", ""))
-            self.image_key_input.setPlainText(config.get("openai_image_api_key", ""))
-            model = config.get("openai_image_model", "gpt-image-2") or "gpt-image-2"
-        else:
-            self.image_url_input.setPlaceholderText("https://generativelanguage.googleapis.com")
-            self.image_url_input.setText(config.get("gemini_base_url", ""))
-            self.image_key_input.setPlainText(config.get("gemini_api_key", ""))
-            model = config.get("gemini_model", "gemini-3-pro-image-preview") or "gemini-3-pro-image-preview"
+        previous_provider = self._current_image_provider
+        if previous_provider and previous_provider in self._image_config_drafts:
+            self._image_config_drafts[previous_provider] = {
+                "base_url": self.image_url_input.text(),
+                "api_key": self.image_key_input.text(),
+                "model": self.image_model_input.currentText(),
+            }
+            self._refresh_provider_labels()
 
+        draft = self._image_config_drafts.get(provider) or {
+            "base_url": "",
+            "api_key": "",
+            "model": meta.get("default_model") or "",
+        }
+        self._current_image_provider = provider
+
+        self.image_url_input.setPlaceholderText(meta.get("url_placeholder") or "")
+        self.image_url_input.setText(draft["base_url"])
+        self.image_key_input.setText(draft["api_key"])
+        model = draft["model"]
+
+        # 刷新模型建议：当前渠道优先
+        self.image_model_input.blockSignals(True)
+        self.image_model_input.clear()
+        suggestions = list(meta.get("model_suggestions") or [])
+        self.image_model_input.addItems(suggestions)
         index = self.image_model_input.findText(model)
         if index >= 0:
             self.image_model_input.setCurrentIndex(index)
         else:
             self.image_model_input.setEditText(model)
+        self.image_model_input.blockSignals(False)
     
     def _save_config(self):
         """保存配置"""
         # 提示词生成AI配置 - 直接获取用户输入，不填充默认值
         prompt_base_url = self.prompt_url_input.text().strip()
-        prompt_api_key = self.prompt_key_input.toPlainText().strip()
+        prompt_api_key = self.prompt_key_input.text().strip()
         prompt_model = self.prompt_model_input.text().strip()
         
         # 图片生成AI配置 - 直接获取用户输入，不填充默认值
-        image_provider = self.image_provider_input.currentData() or "gemini"
+        current_item = self.image_provider_input.currentItem()
+        image_provider = (
+            current_item.data(Qt.ItemDataRole.UserRole)
+            if current_item is not None
+            else "gemini"
+        )
         image_base_url = self.image_url_input.text().strip()
-        image_api_key = self.image_key_input.toPlainText().strip()
+        image_api_key = self.image_key_input.text().strip()
         image_model = self.image_model_input.currentText().strip()
+        self._image_config_drafts[image_provider] = {
+            "base_url": image_base_url,
+            "api_key": image_api_key,
+            "model": image_model,
+        }
         
-        # 验证必填项
-        if not prompt_api_key and not image_api_key:
-            QMessageBox.warning(self, "提示", "请至少配置一个AI服务的API Key")
+        meta = IMAGE_PROVIDER_META.get(image_provider)
+        if not meta:
+            QMessageBox.warning(self, "提示", f"未知图片生成渠道: {image_provider}")
             return
-        
-        # 直接保存用户输入的值（包括空值），不填充默认值
+        # 保存所有渠道草稿，渠道切换不会丢失本次弹窗中的编辑。
         config = {
             "base_url": prompt_base_url,
             "api_key": prompt_api_key,
             "model": prompt_model,
-            "image_provider": image_provider,
         }
-        if image_provider == "openai_images":
+        for provider_id, draft in self._image_config_drafts.items():
+            provider_keys = IMAGE_PROVIDER_META[provider_id]["config_keys"]
             config.update({
-                "openai_image_base_url": image_base_url,
-                "openai_image_api_key": image_api_key,
-                "openai_image_model": image_model,
-            })
-        else:
-            config.update({
-                "gemini_base_url": image_base_url,
-                "gemini_api_key": image_api_key,
-                "gemini_model": image_model,
+                provider_keys["base_url"]: draft["base_url"].strip(),
+                provider_keys["api_key"]: draft["api_key"].strip(),
+                provider_keys["model"]: draft["model"].strip(),
             })
         
         if self.config_manager.save_config(config):
@@ -911,6 +1036,11 @@ class AIGenerateDialog(QDialog):
         """清空所有图片"""
         self.selected_images.clear()
         self.image_list.clear()
+
+    def _show_config(self):
+        """打开独立的 AI 对话配置页。"""
+        dialog = UnifiedAIConfigDialog(self, initial_tab="chat")
+        dialog.exec()
     
     def _on_generate(self):
         """开始生成"""

@@ -1,7 +1,11 @@
-"""AI API 配置管理"""
+"""AI API 配置管理。对话 AI 与图片生成渠道使用相互独立的配置。"""
+from copy import deepcopy
+from typing import Any
+
 import yaml
-from pathlib import Path
 from utils.resource_path import get_resource_path
+
+from components.image_provider_config import IMAGE_PROVIDER_META, extract_provider_credentials
 
 
 class AIConfigManager:
@@ -18,6 +22,10 @@ class AIConfigManager:
         "openai_image_base_url": "https://api.openai.com/v1",
         "openai_image_api_key": "",
         "openai_image_model": "gpt-image-2",
+        "qwen_image_base_url": "",
+        "qwen_image_api_key": "",
+        "qwen_image_model": "qwen-image-3.0-pro",
+        "image_generation_options": {},
     }
     
     def __init__(self):
@@ -35,16 +43,18 @@ class AIConfigManager:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     data = yaml.safe_load(f)
                     if data:
-                        # 直接返回配置文件中的值，不合并默认值
-                        # 确保所有字段都存在，但使用空字符串作为默认值
                         result = {}
-                        for key in self.DEFAULT_CONFIG.keys():
-                            result[key] = data.get(key, "")
+                        for key, default in self.DEFAULT_CONFIG.items():
+                            fallback = deepcopy(default) if isinstance(default, dict) else ""
+                            result[key] = data.get(key, fallback)
                         return result
         except Exception as e:
             print(f"加载AI配置失败: {e}")
         # 如果配置文件不存在或加载失败，返回所有字段为空字符串
-        return {key: "" for key in self.DEFAULT_CONFIG.keys()}
+        return {
+            key: deepcopy(default) if isinstance(default, dict) else ""
+            for key, default in self.DEFAULT_CONFIG.items()
+        }
     
     def save_config(self, config: dict, merge_existing: bool = True) -> bool:
         """保存AI配置，默认保留已有字段"""
@@ -71,9 +81,17 @@ class AIConfigManager:
             return False
     
     def is_configured(self) -> bool:
-        """检查是否已配置API"""
+        """检查 AI 对话服务是否已配置。"""
+        return bool(self.get_chat_config()["api_key"])
+
+    def get_chat_config(self) -> dict[str, str]:
+        """获取只供提示词生成/修改使用的 OpenAI-compatible 配置。"""
         config = self.load_config()
-        return bool(config.get("api_key"))
+        return {
+            "base_url": (config.get("base_url") or "").strip(),
+            "api_key": (config.get("api_key") or "").strip(),
+            "model": (config.get("model") or "").strip(),
+        }
     
     def get_base_url(self) -> str:
         return self.load_config().get("base_url", "")
@@ -95,6 +113,62 @@ class AIConfigManager:
     def get_image_provider(self) -> str:
         return self.load_config().get("image_provider", "") or "gemini"
 
+    def get_image_provider_config(self, provider: str) -> dict[str, str]:
+        """获取指定图片渠道的独立连接配置。"""
+        return extract_provider_credentials(self.load_config(), provider)
+
+    def is_image_provider_configured(self, provider: str | None = None) -> bool:
+        """检查指定（默认当前）图片渠道的连接信息是否完整。"""
+        provider = provider or self.get_image_provider()
+        image_config = self.get_image_provider_config(provider)
+        return all(
+            image_config.get(key)
+            for key in ("base_url", "api_key", "model")
+        )
+
+    def set_active_image_selection(self, provider: str, model: str | None = None) -> bool:
+        """保存主界面当前使用的图片渠道和模型，不改动任何凭证。"""
+        meta = IMAGE_PROVIDER_META.get(provider)
+        if not meta:
+            raise ValueError(f"未知图片生成渠道: {provider}")
+        config: dict[str, str] = {"image_provider": provider}
+        if model is not None:
+            config[meta["config_keys"]["model"]] = model.strip()
+        return self.save_config(config)
+
+    @staticmethod
+    def _options_model_key(model: str) -> str:
+        return model.strip() or "__default__"
+
+    def get_image_generation_options(self, provider: str, model: str = "") -> dict[str, Any]:
+        """读取指定渠道/模型上次使用的生成参数。"""
+        all_options = self.load_config().get("image_generation_options") or {}
+        if not isinstance(all_options, dict):
+            return {}
+        provider_options = all_options.get(provider) or {}
+        if not isinstance(provider_options, dict):
+            return {}
+        options = provider_options.get(self._options_model_key(model)) or {}
+        return deepcopy(options) if isinstance(options, dict) else {}
+
+    def save_image_generation_options(
+        self,
+        provider: str,
+        model: str,
+        options: dict[str, Any],
+    ) -> bool:
+        """保存指定渠道/模型的生成参数偏好。"""
+        if provider not in IMAGE_PROVIDER_META:
+            raise ValueError(f"未知图片生成渠道: {provider}")
+        config = self.load_config()
+        all_options = config.get("image_generation_options") or {}
+        if not isinstance(all_options, dict):
+            all_options = {}
+        all_options = deepcopy(all_options)
+        provider_options = all_options.setdefault(provider, {})
+        provider_options[self._options_model_key(model)] = deepcopy(options)
+        return self.save_config({"image_generation_options": all_options})
+
     def get_openai_image_config(self) -> dict:
         config = self.load_config()
         return {
@@ -103,15 +177,28 @@ class AIConfigManager:
             "model": config.get("openai_image_model", "") or "gpt-image-2",
         }
 
-    def get_active_image_config(self) -> dict:
+    def get_qwen_image_config(self) -> dict:
         config = self.load_config()
-        provider = config.get("image_provider", "") or "gemini"
-        if provider == "openai_images":
-            image_config = self.get_openai_image_config()
-        else:
-            provider = "gemini"
-            image_config = self.get_gemini_config()
+        return {
+            "base_url": config.get("qwen_image_base_url", ""),
+            "api_key": config.get("qwen_image_api_key", ""),
+            "model": config.get("qwen_image_model", "") or "qwen-image-3.0-pro",
+        }
 
+    def get_active_image_config(
+        self,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> dict:
+        """获取生图配置；可用界面快照覆盖当前渠道/模型。"""
+        config = self.load_config()
+        provider = provider or config.get("image_provider", "") or "gemini"
+        if provider not in IMAGE_PROVIDER_META:
+            raise ValueError(f"未知图片生成渠道: {provider}")
+
+        image_config = extract_provider_credentials(config, provider)
+        if model is not None:
+            image_config["model"] = model.strip() or image_config["model"]
         return {
             "provider": provider,
             **image_config,
@@ -125,4 +212,3 @@ class AIConfigManager:
 
     def get_gemini_model(self) -> str:
         return self.get_gemini_config().get("model", "")
-
