@@ -17,7 +17,10 @@ from typing import Optional, List
 from utils.yaml_handler import YamlHandler
 from utils.preset_manager import PresetManager
 from utils.ai_config import AIConfigManager
-from components.image_clients import IMAGE_PROVIDER_CAPABILITIES, create_image_provider
+from components.image_clients import (
+    create_image_provider_from_credentials,
+    get_image_provider_capabilities,
+)
 from components.image_provider_config import IMAGE_PROVIDER_META
 
 
@@ -63,6 +66,7 @@ def get_config():
             'has_gemini_api_key': bool(config.get('gemini_api_key')),
             'has_openai_image_api_key': bool(config.get('openai_image_api_key')),
             'has_qwen_image_api_key': bool(config.get('qwen_image_api_key')),
+            'image_generation_options': config.get('image_generation_options') or {},
         }
         return jsonify(safe_config)
     except Exception as e:
@@ -165,8 +169,56 @@ def update_config():
 
 @app.route('/api/image-providers', methods=['GET'])
 def get_image_providers():
-    """获取图片生成 provider 能力列表"""
-    return jsonify(IMAGE_PROVIDER_CAPABILITIES)
+    """获取不含凭证的图片渠道、模型和能力信息。"""
+    providers = {}
+    for provider, meta in IMAGE_PROVIDER_META.items():
+        credentials = config_manager.get_image_provider_config(provider)
+        configured_model = credentials['model']
+        models = list(meta.get('model_suggestions') or [])
+        if configured_model and configured_model not in models:
+            models.append(configured_model)
+
+        providers[provider] = {
+            'label': meta['label'],
+            'models': models,
+            'default_model': meta.get('default_model') or '',
+            'configured_model': configured_model,
+            'model_config_key': meta['config_keys']['model'],
+            'has_api_key': bool(credentials['api_key']),
+            'is_configured': all(
+                credentials.get(key) for key in ('base_url', 'api_key', 'model')
+            ),
+            'capabilities': {
+                model: get_image_provider_capabilities(provider, model)
+                for model in models
+            },
+        }
+    return jsonify(providers)
+
+
+@app.route('/api/image-generation-settings', methods=['POST'])
+def save_image_generation_settings():
+    """保存 Web 主界面当前渠道、模型及该组合的生成参数。"""
+    payload = request.json or {}
+    provider = payload.get('provider')
+    model = payload.get('model')
+    options = payload.get('options')
+
+    if provider not in IMAGE_PROVIDER_META:
+        return jsonify({'error': f'未知图片生成渠道: {provider}'}), 400
+    if not isinstance(model, str) or not model.strip():
+        return jsonify({'error': '图片模型不能为空'}), 400
+    if options is not None and not isinstance(options, dict):
+        return jsonify({'error': '生成参数必须是 JSON 对象'}), 400
+
+    model = model.strip()
+    if not config_manager.set_active_image_selection(provider, model):
+        return jsonify({'error': '图片渠道选择保存失败'}), 500
+    if options is not None and not config_manager.save_image_generation_options(
+        provider, model, options
+    ):
+        return jsonify({'error': '图片生成参数保存失败'}), 500
+    return jsonify({'success': True})
 
 
 @app.route('/api/options', methods=['GET'])
@@ -397,10 +449,20 @@ def generate_image():
     """生成图片"""
     temp_files = []
     try:
-        data = request.json
+        data = request.json or {}
         prompt = data.get('prompt', '')
         images = data.get('images', [])
         options = data.get('options') or {}
+        provider = data.get('provider') or config_manager.get_image_provider()
+        if provider not in IMAGE_PROVIDER_META:
+            return jsonify({'error': f'未知图片生成渠道: {provider}'}), 400
+
+        credentials = config_manager.get_image_provider_config(provider)
+        model = (data.get('model') or credentials['model']).strip()
+        if not model:
+            return jsonify({'error': '图片模型不能为空'}), 400
+        credentials['model'] = model
+
         if not options:
             options = {
                 'aspect_ratio': data.get('aspect_ratio', '1:1'),
@@ -447,9 +509,16 @@ def generate_image():
                 else:
                     processed_images.append(img_str)
 
-        # 初始化当前图片生成 provider
-        client = create_image_provider(config_manager.load_config())
+        # 使用请求开始时的渠道和模型快照，避免全局配置变化影响本次生成。
+        client = create_image_provider_from_credentials(
+            provider,
+            credentials['base_url'],
+            credentials['api_key'],
+            model,
+        )
         client.set_generation_options(options)
+        config_manager.set_active_image_selection(provider, model)
+        config_manager.save_image_generation_options(provider, model, options)
 
         # 生成图片
         generated_image = client.generate_image(

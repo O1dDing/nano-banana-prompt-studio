@@ -1403,6 +1403,35 @@ body {
     gap: var(--spacing-md);
 }
 
+.image-selection-grid,
+#imageProviderOptions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.image-selection-grid .form-group,
+#imageProviderOptions .form-group {
+    min-width: 0;
+    margin-bottom: 0;
+}
+
+.image-selection-grid .select-input,
+#imageProviderOptions .select-input {
+    width: 100%;
+    min-width: 0;
+}
+
+.image-selection-grid .provider-status {
+    grid-column: 1 / -1;
+}
+
+.provider-status {
+    background: var(--error-light, #fff1f0);
+    color: var(--error-color);
+    border-color: var(--error-color);
+}
+
 #generateImageBtn.sidebar-btn {
     width: 100%;
     margin-top: var(--spacing-md);

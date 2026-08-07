@@ -27,7 +27,19 @@
             <div class="section">
                 <h2 class="section-title">生成设置</h2>
                 <div class="gen-controls">
-                    <div id="activeImageProvider" class="provider-status">当前渠道：加载中...</div>
+                    <div class="image-selection-grid">
+                        <div class="form-group">
+                            <label for="imageProviderSelect">渠道</label>
+                            <select id="imageProviderSelect" class="select-input"></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="imageModelSelect">模型</label>
+                            <select id="imageModelSelect" class="select-input"></select>
+                        </div>
+                        <div id="activeImageProvider" class="provider-status" role="status">
+                            正在加载图片渠道...
+                        </div>
+                    </div>
                     <div id="imageProviderOptions"></div>
 
                     <!-- 参考图片 -->
@@ -182,6 +194,10 @@
                         <div class="form-group">
                             <label for="clothing">穿着</label>
                             <input type="text" id="clothing" class="text-input">
+                        </div>
+                        <div class="form-group">
+                            <label for="clothingDetails">服装细节</label>
+                            <input type="text" id="clothingDetails" class="text-input">
                         </div>
                         <div class="form-group">
                             <label for="accessories">配饰</label>

@@ -7,6 +7,9 @@ const state = {
     config: {},
 
     imageProviders: {},
+    activeImageProvider: '',
+    activeImageModel: '',
+    imageSettingsSaveQueue: Promise.resolve(),
     uploadedImages: [], // Base64 strings
     isGenerating: false
 };
@@ -34,6 +37,7 @@ const categoryPresetConfig = {
         ['emotion', ['场景', '主体', '表情与动作', '情绪']],
         ['action', ['场景', '主体', '表情与动作', '动作']],
         ['clothing', ['场景', '主体', '服装', '穿着']],
+        ['clothingDetails', ['场景', '主体', '服装', '细节']],
         ['accessories', ['场景', '主体', '配饰']]
     ],
     camera: [
@@ -73,6 +77,7 @@ const elements = {
     emotion: document.getElementById('emotion'),
     action: document.getElementById('action'),
     clothing: document.getElementById('clothing'),
+    clothingDetails: document.getElementById('clothingDetails'),
     accessories: document.getElementById('accessories'),
     background: document.getElementById('background'),
     depth: document.getElementById('depth'),
@@ -127,6 +132,8 @@ const elements = {
 
     // 生图区域
     activeImageProvider: document.getElementById('activeImageProvider'),
+    imageProviderSelect: document.getElementById('imageProviderSelect'),
+    imageModelSelect: document.getElementById('imageModelSelect'),
     imageProviderOptions: document.getElementById('imageProviderOptions'),
     // genThinkingLevel: document.getElementById('genThinkingLevel'), // Removed from HTML
     imageInput: document.getElementById('imageInput'),
@@ -242,9 +249,7 @@ function getFormData() {
                 },
                 "服装": {
                     "穿着": elements.clothing.value,
-                    // Note: Clothing Detail field removed in simplified HTML to save space, skipping or mocking?
-                    // Re-adding if needed, but for now let's map what we have.
-                    // "细节": ... 
+                    "细节": elements.clothingDetails.value
                 },
                 "配饰": elements.accessories.value
             },
@@ -335,6 +340,7 @@ function setFormData(data) {
     }
 
     elements.clothing.value = getValue(data, "场景", "主体", "服装", "穿着");
+    elements.clothingDetails.value = getValue(data, "场景", "主体", "服装", "细节");
     elements.accessories.value = getValue(data, "场景", "主体", "配饰");
     elements.background.value = getValue(data, "场景", "背景", "描述");
     elements.depth.value = getValue(data, "场景", "背景", "景深");
@@ -561,21 +567,27 @@ function updateJsonPreview() {
 async function loadImageProviders() {
     try {
         const response = await fetch('/api/image-providers');
+        if (!response.ok) throw new Error(response.statusText);
         state.imageProviders = await response.json();
-        renderImageProviderOptions();
+        return true;
     } catch (error) {
         console.error('Load image providers error:', error);
+        state.imageProviders = {};
+        return false;
     }
 }
 
 async function loadConfig() {
     try {
         const response = await fetch('/api/config');
+        if (!response.ok) throw new Error(response.statusText);
         const config = await response.json();
         state.config = config;
-        renderImageProviderOptions();
+        return true;
     } catch (error) {
         console.error('Load config error:', error);
+        state.config = {};
+        return false;
     }
 }
 
@@ -634,7 +646,8 @@ async function saveConfigs() {
             body: JSON.stringify(payload)
         });
         if (response.ok) {
-            await loadConfig();
+            await Promise.all([loadConfig(), loadImageProviders()]);
+            await renderImageGenerationControls(elements.configImageProvider.value);
             showToast('配置保存成功', 'success');
             elements.configModal.classList.remove('active');
         } else {
@@ -647,26 +660,104 @@ async function saveConfigs() {
 }
 
 function getActiveImageProvider() {
-    return state.config.image_provider || 'gemini';
+    return state.activeImageProvider || elements.imageProviderSelect.value || '';
+}
+
+function getActiveImageModel() {
+    return state.activeImageModel || elements.imageModelSelect.value || '';
+}
+
+function getAvailableImageProviders() {
+    return Object.entries(state.imageProviders || {})
+        .filter(([, config]) => config.has_api_key);
+}
+
+async function renderImageGenerationControls(preferredProvider = '') {
+    const availableProviders = getAvailableImageProviders();
+    elements.imageProviderSelect.replaceChildren();
+
+    if (availableProviders.length === 0) {
+        const emptyOption = new Option('请先配置图片渠道', '');
+        elements.imageProviderSelect.add(emptyOption);
+        elements.imageProviderSelect.disabled = true;
+        elements.imageModelSelect.replaceChildren();
+        elements.imageModelSelect.add(new Option('暂无可用模型', ''));
+        elements.imageModelSelect.disabled = true;
+        state.activeImageProvider = '';
+        state.activeImageModel = '';
+        elements.imageProviderOptions.replaceChildren();
+        updateImageGenerationAvailability();
+        return;
+    }
+
+    availableProviders.forEach(([provider, config]) => {
+        elements.imageProviderSelect.add(new Option(config.label || provider, provider));
+    });
+    elements.imageProviderSelect.disabled = false;
+
+    const availableIds = availableProviders.map(([provider]) => provider);
+    const selectedProvider = [preferredProvider, state.config.image_provider]
+        .find(provider => availableIds.includes(provider)) || availableIds[0];
+    elements.imageProviderSelect.value = selectedProvider;
+    state.activeImageProvider = selectedProvider;
+    renderImageModelChoices(selectedProvider);
+    await persistImageGenerationSettings(false, true);
+}
+
+function renderImageModelChoices(provider, preferredModel = '') {
+    const providerConfig = state.imageProviders[provider];
+    elements.imageModelSelect.replaceChildren();
+    if (!providerConfig) {
+        state.activeImageModel = '';
+        elements.imageModelSelect.disabled = true;
+        renderImageProviderOptions();
+        return;
+    }
+
+    const configuredModel = state.config[providerConfig.model_config_key]
+        || providerConfig.configured_model
+        || providerConfig.default_model
+        || '';
+    const models = [...(providerConfig.models || [])];
+    if (configuredModel && !models.includes(configuredModel)) models.push(configuredModel);
+    models.forEach(model => elements.imageModelSelect.add(new Option(model, model)));
+
+    const selectedModel = [preferredModel, configuredModel, providerConfig.default_model]
+        .find(model => model && models.includes(model)) || models[0] || '';
+    elements.imageModelSelect.value = selectedModel;
+    elements.imageModelSelect.disabled = models.length === 0;
+    state.activeImageModel = selectedModel;
+    renderImageProviderOptions();
+}
+
+function getSavedImageOptions(provider, model) {
+    const allOptions = state.config.image_generation_options || {};
+    const providerOptions = allOptions[provider] || {};
+    return providerOptions[model || '__default__'] || {};
 }
 
 function renderImageProviderOptions() {
-    if (!elements.imageProviderOptions || !state.imageProviders) return;
+    if (!elements.imageProviderOptions) return;
 
     const provider = getActiveImageProvider();
-    const providerConfig = state.imageProviders[provider] || state.imageProviders.gemini;
-    if (!providerConfig || !providerConfig.options) return;
+    const model = getActiveImageModel();
+    const providerConfig = state.imageProviders[provider];
+    const capabilities = providerConfig?.capabilities?.[model];
+    const providerOptions = capabilities?.options || {};
+    const savedOptions = getSavedImageOptions(provider, model);
 
-    if (elements.activeImageProvider) {
-        elements.activeImageProvider.textContent = state.imageProviders[provider]
-            ? `当前生图渠道：${providerConfig.label || provider}`
-            : `当前生图渠道配置无效：${provider}`;
+    if (!providerConfig || Object.keys(providerOptions).length === 0) {
+        elements.imageProviderOptions.replaceChildren();
+        updateImageGenerationAvailability();
+        return;
     }
 
-    elements.imageProviderOptions.innerHTML = Object.entries(providerConfig.options).map(([key, option]) => {
+    elements.imageProviderOptions.innerHTML = Object.entries(providerOptions).map(([key, option]) => {
         const values = option.values || [];
         const options = values.map(value => {
-            const selected = value === option.default ? 'selected' : '';
+            const savedValue = savedOptions[key];
+            const selectedValue = values.includes(savedValue) ? savedValue : option.default;
+            const selected = value === selectedValue ? 'selected' : '';
             return `<option value="${value}" ${selected}>${value}</option>`;
         }).join('');
 
@@ -679,6 +770,11 @@ function renderImageProviderOptions() {
             </div>
         `;
     }).join('');
+
+    document.querySelectorAll('.image-option-input').forEach(input => {
+        input.addEventListener('change', () => persistImageGenerationSettings(true));
+    });
+    updateImageGenerationAvailability();
 }
 
 function collectImageOptions() {
@@ -687,6 +783,61 @@ function collectImageOptions() {
         options[input.dataset.optionKey] = input.value;
     });
     return options;
+}
+
+function persistImageGenerationSettings(includeOptions = true, quiet = false) {
+    const save = () => saveImageGenerationSettings(includeOptions, quiet);
+    state.imageSettingsSaveQueue = state.imageSettingsSaveQueue.then(save, save);
+    return state.imageSettingsSaveQueue;
+}
+
+async function saveImageGenerationSettings(includeOptions, quiet) {
+    const provider = getActiveImageProvider();
+    const model = getActiveImageModel();
+    if (!provider || !model) return false;
+
+    const payload = { provider, model };
+    if (includeOptions) payload.options = collectImageOptions();
+
+    try {
+        const response = await fetch('/api/image-generation-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.error || response.statusText);
+        }
+
+        state.config.image_provider = provider;
+        const providerConfig = state.imageProviders[provider];
+        state.config[providerConfig.model_config_key] = model;
+        providerConfig.configured_model = model;
+        if (includeOptions) {
+            state.config.image_generation_options ||= {};
+            state.config.image_generation_options[provider] ||= {};
+            state.config.image_generation_options[provider][model] = payload.options;
+        }
+        return true;
+    } catch (error) {
+        console.error('Save image generation settings error:', error);
+        if (!quiet) showToast('生图设置保存失败: ' + error.message, 'error');
+        return false;
+    }
+}
+
+function updateImageGenerationAvailability() {
+    const provider = getActiveImageProvider();
+    const providerConfig = state.imageProviders[provider];
+    const ready = Boolean(providerConfig?.is_configured && getActiveImageModel());
+    const hasAnyProvider = getAvailableImageProviders().length > 0;
+
+    elements.activeImageProvider.hidden = ready;
+    elements.activeImageProvider.textContent = !hasAnyProvider
+        ? '请先在 AI 配置中填写图片渠道密钥'
+        : '当前图片渠道配置不完整，请检查 Base URL、密钥和模型';
+    elements.generateImageBtn.disabled = state.isGenerating || !ready;
 }
 
 function updateImageConfigVisibility() {
@@ -1186,7 +1337,17 @@ async function generateImage() {
         return;
     }
 
-    elements.generateImageBtn.disabled = true;
+    const provider = getActiveImageProvider();
+    const model = getActiveImageModel();
+    const providerConfig = state.imageProviders[provider];
+    if (!providerConfig?.is_configured || !model) {
+        showToast('请先完成当前图片渠道配置', 'warning');
+        updateImageGenerationAvailability();
+        return;
+    }
+
+    state.isGenerating = true;
+    updateImageGenerationAvailability();
     elements.generateImageBtn.innerHTML = '⏳ 生成中...';
     elements.resultPreview.innerHTML = '<div class="empty-state"><p>生成中...</p></div>';
 
@@ -1197,8 +1358,9 @@ async function generateImage() {
             body: JSON.stringify({
                 prompt: prompt,
                 images: state.uploadedImages,
-                options: collectImageOptions(),
-                // thinking_level: elements.genThinkingLevel.value // Removed
+                provider,
+                model,
+                options: collectImageOptions()
             })
         });
 
@@ -1235,7 +1397,8 @@ async function generateImage() {
             </div>
         `;
     } finally {
-        elements.generateImageBtn.disabled = false;
+        state.isGenerating = false;
+        updateImageGenerationAvailability();
         elements.generateImageBtn.innerHTML = `
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z" />
@@ -1289,8 +1452,9 @@ function downloadImage(dataUrl) {
 // Init
 // ========================================
 function init() {
-    loadImageProviders();
-    loadConfig();
+    Promise.all([loadImageProviders(), loadConfig()])
+        .then(() => renderImageGenerationControls())
+        .catch(error => console.error('Initialize image generation controls error:', error));
 
     // === 移动端侧边栏切换 ===
     const sidebarToggleBtn = document.getElementById('sidebarToggleBtn');
@@ -1315,6 +1479,16 @@ function init() {
     elements.saveConfigBtn.addEventListener('click', saveConfigs);
     elements.configImageProvider.addEventListener('change', () => {
         updateImageConfigVisibility();
+    });
+    elements.imageProviderSelect.addEventListener('change', async () => {
+        state.activeImageProvider = elements.imageProviderSelect.value;
+        renderImageModelChoices(state.activeImageProvider);
+        await persistImageGenerationSettings(false);
+    });
+    elements.imageModelSelect.addEventListener('change', async () => {
+        state.activeImageModel = elements.imageModelSelect.value;
+        renderImageProviderOptions();
+        await persistImageGenerationSettings(false);
     });
 
     elements.resetFormBtn.addEventListener('click', clearForm);
@@ -1663,6 +1837,7 @@ const fieldPresetPaths = {
     emotion: ["场景", "主体", "表情与动作", "情绪"],
     action: ["场景", "主体", "表情与动作", "动作"],
     clothing: ["场景", "主体", "服装", "穿着"],
+    clothingDetails: ["场景", "主体", "服装", "细节"],
     accessories: ["场景", "主体", "配饰"],
     background: ["场景", "背景", "描述"],
     depth: ["场景", "背景", "景深"],
