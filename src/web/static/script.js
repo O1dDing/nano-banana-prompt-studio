@@ -180,21 +180,43 @@ const elements = {
     configQwenImageApiKey: document.getElementById('configQwenImageApiKey'),
     configQwenImageModel: document.getElementById('configQwenImageModel'),
 
-    saveConfigBtn: document.getElementById('saveConfigBtn'),
-
-    // Toast
-    toast: document.getElementById('toast')
+    saveConfigBtn: document.getElementById('saveConfigBtn')
 };
 
 // ========================================
 // 工具函数
 // ========================================
+let toastContainer = null;
+
 function showToast(message, type = 'info') {
-    elements.toast.textContent = message;
-    elements.toast.className = `toast ${type} show`;
+    if (!toastContainer) {
+        toastContainer = document.createElement('div');
+        toastContainer.className = 'toast-container';
+        document.body.appendChild(toastContainer);
+    }
+    const item = document.createElement('div');
+    item.className = `toast-item ${type}`;
+    item.setAttribute('role', 'status');
+    item.textContent = message;
+    toastContainer.appendChild(item);
+    requestAnimationFrame(() => item.classList.add('show'));
     setTimeout(() => {
-        elements.toast.classList.remove('show');
+        item.classList.remove('show');
+        setTimeout(() => item.remove(), 300);
     }, 3000);
+}
+
+/**
+ * 启动一个秒级计时器，每秒回调 setText(已耗时秒数)，返回停止函数。
+ * 用于生图等长任务的耗时反馈。
+ */
+function startElapsedTimer(setText) {
+    const startTime = Date.now();
+    setText(0);
+    const timerId = setInterval(() => {
+        setText(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+    return () => clearInterval(timerId);
 }
 
 // ========================================
@@ -834,6 +856,7 @@ function updateImageGenerationAvailability() {
     const hasAnyProvider = getAvailableImageProviders().length > 0;
 
     elements.activeImageProvider.hidden = ready;
+    elements.activeImageProvider.classList.toggle('is-warning', !ready);
     elements.activeImageProvider.textContent = !hasAnyProvider
         ? '请先在 AI 配置中填写图片渠道密钥'
         : '当前图片渠道配置不完整，请检查 Base URL、密钥和模型';
@@ -1138,7 +1161,13 @@ async function handleAiExecute() {
     elements.aiModalExecuteBtn.style.display = 'none';
     elements.aiModalStopBtn.style.display = 'inline-block';
     elements.aiModalApplyBtn.style.display = 'none';
-    
+
+    // 耗时反馈：生成期间实时显示已耗时
+    const stopStatusTimer = startElapsedTimer(seconds => {
+        elements.aiStatusText.textContent = `正在生成 · 已耗时 ${seconds}s`;
+    });
+    let aiFinalStatus = '';
+
     // Create AbortController
     aiAbortController = new AbortController();
     const signal = aiAbortController.signal;
@@ -1180,7 +1209,7 @@ async function handleAiExecute() {
                 if (line.startsWith('data: ')) {
                     const dataStr = line.slice(6);
                     if (dataStr === '[DONE]') {
-                        elements.aiStatusText.textContent = '生成完成';
+                        aiFinalStatus = '生成完成';
                         elements.aiModalStopBtn.style.display = 'none';
                         elements.aiModalApplyBtn.style.display = 'inline-block';
                         elements.aiModalExecuteBtn.style.display = 'inline-block';
@@ -1238,15 +1267,19 @@ async function handleAiExecute() {
 
     } catch (e) {
         if (e.name === 'AbortError') {
-            elements.aiStatusText.textContent = '已停止';
+            aiFinalStatus = '已停止';
             showToast('已停止生成', 'info');
         } else {
-            elements.aiStatusText.textContent = '错误: ' + e.message;
+            aiFinalStatus = '错误: ' + e.message;
             showToast('错误: ' + e.message, 'error');
         }
         elements.aiModalStopBtn.style.display = 'none';
         elements.aiModalExecuteBtn.style.display = 'inline-block';
     } finally {
+        stopStatusTimer();
+        if (aiFinalStatus) {
+            elements.aiStatusText.textContent = aiFinalStatus;
+        }
         aiAbortController = null;
     }
 }
@@ -1348,8 +1381,24 @@ async function generateImage() {
 
     state.isGenerating = true;
     updateImageGenerationAvailability();
-    elements.generateImageBtn.innerHTML = '⏳ 生成中...';
-    elements.resultPreview.innerHTML = '<div class="empty-state"><p>生成中...</p></div>';
+
+    // 生成中状态：骨架屏 + 实时耗时反馈
+    const genBtnDefaultHtml = elements.generateImageBtn.innerHTML;
+    elements.resultPreview.replaceChildren();
+    const generatingState = document.createElement('div');
+    generatingState.className = 'generating-state';
+    const skeleton = document.createElement('div');
+    skeleton.className = 'result-skeleton';
+    const elapsedText = document.createElement('div');
+    elapsedText.className = 'gen-elapsed';
+    generatingState.appendChild(skeleton);
+    generatingState.appendChild(elapsedText);
+    elements.resultPreview.appendChild(generatingState);
+
+    const stopTimer = startElapsedTimer(seconds => {
+        elapsedText.innerHTML = `图片生成中 · 已耗时 <strong>${seconds}</strong> 秒`;
+        elements.generateImageBtn.textContent = `⏳ 生成中 ${seconds}s`;
+    });
 
     try {
         const response = await fetch('/api/generate-image', {
@@ -1368,21 +1417,24 @@ async function generateImage() {
 
         if (response.ok && data.image) {
             state.currentGeneratedImage = data.image;
-            
-            elements.resultPreview.innerHTML = `
-                <div class="generated-result-container" style="position: relative; text-align: center; width: 100%;">
-                    <div style="position: relative; display: inline-block; max-width: 100%;">
-                        <img src="${data.image}" alt="Generated Image" 
-                             style="cursor: zoom-in; max-width: 100%; max-height: 300px; object-fit: contain; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); transition: transform 0.2s;"
-                             onmouseover="this.style.transform='scale(1.01)'"
-                             onmouseout="this.style.transform='scale(1)'"
-                             onclick="openImagePreview('${data.image}')">
-                        <div style="position: absolute; bottom: 10px; right: 10px; background: rgba(0,0,0,0.6); padding: 5px; border-radius: 4px;">
-                            <span style="color: white; font-size: 12px;">🔍 点击放大</span>
-                        </div>
-                    </div>
-                </div>
-            `;
+
+            // 用 DOM 构建结果，避免把几 MB 的 dataURL 写进 HTML 属性
+            const container = document.createElement('div');
+            container.className = 'generated-result-container';
+            const wrap = document.createElement('div');
+            wrap.className = 'generated-img-wrap';
+            const img = document.createElement('img');
+            img.src = data.image;
+            img.alt = '生成结果';
+            img.className = 'generated-img';
+            img.addEventListener('click', () => openImagePreview(data.image));
+            const hint = document.createElement('div');
+            hint.className = 'img-zoom-hint';
+            hint.textContent = '🔍 点击放大';
+            wrap.appendChild(img);
+            wrap.appendChild(hint);
+            container.appendChild(wrap);
+            elements.resultPreview.replaceChildren(container);
             showToast('图片生成成功!', 'success');
         } else {
             throw new Error(data.error || '生成失败');
@@ -1390,21 +1442,22 @@ async function generateImage() {
 
     } catch (e) {
         showToast('生成错误: ' + e.message, 'error');
-        elements.resultPreview.innerHTML = `
-            <div class="empty-state">
-                <p style="color: var(--error-color)">生成失败</p>
-                <p class="hint">${e.message}</p>
-            </div>
-        `;
+        const errorState = document.createElement('div');
+        errorState.className = 'empty-state';
+        const title = document.createElement('p');
+        title.style.color = 'var(--error-color)';
+        title.textContent = '生成失败';
+        const hint = document.createElement('p');
+        hint.className = 'hint';
+        hint.textContent = e.message;
+        errorState.appendChild(title);
+        errorState.appendChild(hint);
+        elements.resultPreview.replaceChildren(errorState);
     } finally {
+        stopTimer();
         state.isGenerating = false;
         updateImageGenerationAvailability();
-        elements.generateImageBtn.innerHTML = `
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z" />
-            </svg>
-            生成图片
-        `;
+        elements.generateImageBtn.innerHTML = genBtnDefaultHtml;
     }
 }
 
@@ -1863,16 +1916,9 @@ function getNestedValue(obj, path) {
 
 async function updateFieldSuggestions() {
     try {
-        const res = await fetch('/api/presets');
-        const list = await res.json();
-        const presetDataList = await Promise.all(
-            list.map(async (p) => {
-                try {
-                    const r = await fetch(`/api/presets/${p.name}`);
-                    return await r.json();
-                } catch (e) { return null; }
-            })
-        );
+        const res = await fetch('/api/presets/details');
+        if (!res.ok) throw new Error(res.statusText);
+        const presetDataList = await res.json();
 
         for (const [fieldId, path] of Object.entries(fieldPresetPaths)) {
             const values = new Set();

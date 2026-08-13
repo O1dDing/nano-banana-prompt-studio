@@ -23,6 +23,9 @@
     --warning-color: #f59e0b;
     --danger-color: #ef4444;
     --info-color: #3b82f6;
+    /* error 别名：历史代码中引用了 --error-* 但从未定义，导致颜色失效 */
+    --error-color: var(--danger-color);
+    --error-light: #fef2f2;
 
     /* 阴影 */
     --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
@@ -827,39 +830,47 @@ body {
 }
 
 /* ========================================
-   Toast 提示
+   Toast 提示（堆叠式，多条不互相覆盖）
    ======================================== */
-.toast {
+.toast-container {
     position: fixed;
     bottom: var(--spacing-xl);
     right: var(--spacing-xl);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--spacing-sm);
+    z-index: 2000;
+    pointer-events: none;
+}
+
+.toast-item {
     background: var(--text-primary);
     color: white;
     padding: var(--spacing-md) var(--spacing-lg);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-lg);
-    z-index: 2000;
     opacity: 0;
-    transform: translateY(20px);
+    transform: translateY(12px);
     transition: all var(--transition-base);
-    pointer-events: none;
+    pointer-events: auto;
+    max-width: 360px;
 }
 
-.toast.show {
+.toast-item.show {
     opacity: 1;
     transform: translateY(0);
-    pointer-events: auto;
 }
 
-.toast.success {
+.toast-item.success {
     background: var(--success-color);
 }
 
-.toast.error {
+.toast-item.error {
     background: var(--danger-color);
 }
 
-.toast.warning {
+.toast-item.warning {
     background: var(--warning-color);
 }
 
@@ -1278,6 +1289,88 @@ body {
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
+/* 生成中骨架屏与耗时反馈 */
+.generating-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-md);
+    width: 100%;
+    padding: var(--spacing-lg);
+}
+
+.result-skeleton {
+    width: min(280px, 70%);
+    aspect-ratio: 1 / 1;
+    border-radius: var(--radius-lg);
+    background: linear-gradient(100deg,
+            var(--bg-tertiary) 40%,
+            #e8edf5 50%,
+            var(--bg-tertiary) 60%);
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+    0% {
+        background-position: 100% 0;
+    }
+
+    100% {
+        background-position: -100% 0;
+    }
+}
+
+.gen-elapsed {
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.gen-elapsed strong {
+    color: var(--primary-color);
+}
+
+/* 生成结果展示 */
+.generated-result-container {
+    position: relative;
+    text-align: center;
+    width: 100%;
+}
+
+.generated-img-wrap {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+}
+
+.generated-img {
+    cursor: zoom-in;
+    max-width: 100%;
+    max-height: 300px;
+    object-fit: contain;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s;
+}
+
+.generated-img:hover {
+    transform: scale(1.01);
+}
+
+.img-zoom-hint {
+    position: absolute;
+    bottom: 10px;
+    right: 10px;
+    background: rgba(0, 0, 0, 0.6);
+    color: white;
+    font-size: 12px;
+    padding: 5px 8px;
+    border-radius: 4px;
+    pointer-events: none;
+}
+
 .sub-tools {
     display: flex;
     gap: 8px;
@@ -1426,10 +1519,10 @@ body {
     grid-column: 1 / -1;
 }
 
-.provider-status {
-    background: var(--error-light, #fff1f0);
+.provider-status.is-warning {
+    background: var(--error-light);
     color: var(--error-color);
-    border-color: var(--error-color);
+    border-color: color-mix(in srgb, var(--error-color) 35%, transparent);
 }
 
 #generateImageBtn.sidebar-btn {

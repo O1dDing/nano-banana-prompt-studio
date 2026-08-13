@@ -306,6 +306,21 @@ def get_presets():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/presets/details', methods=['GET'])
+def get_all_preset_details():
+    """一次性获取全部预设的完整数据，供前端字段建议等功能使用，避免逐个请求。"""
+    try:
+        presets = preset_manager.get_all_presets()
+        details = []
+        for preset in presets:
+            data = preset_manager.load_preset(preset['name'])
+            if data is not None:
+                details.append(data)
+        return jsonify(details)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/presets/<name>', methods=['GET'])
 def get_preset(name):
     """获取指定预设"""
