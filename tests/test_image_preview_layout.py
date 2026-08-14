@@ -136,6 +136,40 @@ class ImagePreviewLayoutTests(unittest.TestCase):
 
             window.close()
 
+    def test_long_generation_error_does_not_collapse_main_splitter(self):
+        config = deepcopy(AIConfigManager.DEFAULT_CONFIG)
+        with (
+            patch.object(AIConfigManager, "load_config", return_value=config),
+            patch.object(AIConfigManager, "save_config", return_value=True),
+        ):
+            window = PromptGeneratorApp()
+            window.resize(1400, 900)
+            window.show()
+            self.app.processEvents()
+
+            splitter_sizes_before = window.main_splitter.sizes()
+            error_message = (
+                "ContentFilterError.IntentDetected.PolicyViolation: "
+                + "x" * 800
+                + "; Request id: 021786687661009b75b42a52114d75a63a7057f0ece04dd564b0c"
+            )
+
+            window._on_generation_error(error_message)
+            self.app.processEvents()
+
+            splitter_sizes_after = window.main_splitter.sizes()
+            self.assertGreater(
+                splitter_sizes_after[0],
+                splitter_sizes_before[0] * 0.8,
+                f"long status text collapsed splitter: {splitter_sizes_before} -> {splitter_sizes_after}",
+            )
+            self.assertEqual(
+                window.image_status_label.text(),
+                "\u751f\u6210\u5931\u8d25\uff0c\u60ac\u505c\u67e5\u770b\u9519\u8bef\u8be6\u60c5",
+            )
+            self.assertEqual(window.image_status_label.toolTip(), error_message)
+            window.close()
+
 
 if __name__ == "__main__":
     unittest.main()

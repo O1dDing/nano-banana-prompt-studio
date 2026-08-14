@@ -62,10 +62,13 @@ def get_config():
             'openai_image_model': config.get('openai_image_model', ''),
             'qwen_image_base_url': config.get('qwen_image_base_url', ''),
             'qwen_image_model': config.get('qwen_image_model', ''),
+            'doubao_image_base_url': config.get('doubao_image_base_url', ''),
+            'doubao_image_model': config.get('doubao_image_model', ''),
             'has_api_key': bool(config.get('api_key')),
             'has_gemini_api_key': bool(config.get('gemini_api_key')),
             'has_openai_image_api_key': bool(config.get('openai_image_api_key')),
             'has_qwen_image_api_key': bool(config.get('qwen_image_api_key')),
+            'has_doubao_image_api_key': bool(config.get('doubao_image_api_key')),
             'image_generation_options': config.get('image_generation_options') or {},
         }
         return jsonify(safe_config)
@@ -159,6 +162,12 @@ def update_config():
             config['qwen_image_api_key'] = data['qwen_image_api_key']
         if 'qwen_image_model' in data:
             config['qwen_image_model'] = data['qwen_image_model']
+        if 'doubao_image_base_url' in data:
+            config['doubao_image_base_url'] = data['doubao_image_base_url']
+        if 'doubao_image_api_key' in data:
+            config['doubao_image_api_key'] = data['doubao_image_api_key']
+        if 'doubao_image_model' in data:
+            config['doubao_image_model'] = data['doubao_image_model']
         
         if not config_manager.save_config(config):
             return jsonify({'error': '配置写入失败'}), 500

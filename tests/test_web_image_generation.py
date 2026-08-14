@@ -1,4 +1,5 @@
 import importlib.util
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -50,6 +51,11 @@ class WebImageGenerationApiTests(unittest.TestCase):
                 "api_key": "qwen-key",
                 "model": "qwen-image-3.0-pro",
             },
+            "doubao_image": {
+                "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+                "api_key": "doubao-key",
+                "model": "doubao-seedream-5-0-pro-260628",
+            },
         }
         with patch.object(
             web_app.config_manager,
@@ -64,8 +70,40 @@ class WebImageGenerationApiTests(unittest.TestCase):
         self.assertTrue(data["gemini"]["is_configured"])
         self.assertFalse(data["openai_images"]["has_api_key"])
         self.assertFalse(data["qwen_image"]["is_configured"])
+        self.assertTrue(data["doubao_image"]["is_configured"])
         self.assertNotIn("api_key", data["gemini"])
         self.assertIn("gemini-3-pro-image-preview", data["gemini"]["capabilities"])
+
+    def test_web_settings_include_doubao_channel(self):
+        html = (SRC / "web" / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('value="doubao_image"', html)
+        self.assertIn('id="configDoubaoImageBaseUrl"', html)
+        self.assertIn('id="configDoubaoImageApiKey"', html)
+        self.assertIn('id="configDoubaoImageModel"', html)
+
+    def test_generation_error_state_wraps_full_message(self):
+        script = (SRC / "web" / "static" / "script.js").read_text(encoding="utf-8")
+        styles = (SRC / "web" / "static" / "style.css").read_text(encoding="utf-8")
+
+        self.assertIn("errorState.className = 'generation-error';", script)
+        self.assertIn("errorState.setAttribute('role', 'alert');", script)
+        self.assertIn("elements.resultPreview.classList.add('has-error');", script)
+        self.assertRegex(
+            styles,
+            re.compile(
+                r"\.generation-error-message\s*\{[^}]*"
+                r"overflow-wrap:\s*anywhere;[^}]*"
+                r"white-space:\s*pre-wrap;",
+                re.DOTALL,
+            ),
+        )
+        self.assertRegex(
+            styles,
+            re.compile(
+                r"\.result-preview\.has-error\s*\{[^}]*overflow:\s*visible;",
+                re.DOTALL,
+            ),
+        )
 
     def test_generation_settings_are_scoped_by_provider_and_model(self):
         payload = {
@@ -134,6 +172,54 @@ class WebImageGenerationApiTests(unittest.TestCase):
             "requested-model",
         )
         self.assertEqual(image_client.options, {"aspect_ratio": "16:9"})
+
+    def test_generate_image_returns_provider_error_verbatim(self):
+        raw_error = (
+            "豆包 Seedream 请求失败: Error code: 400 - {'error': {"
+            "'code': 'OutputImageSensitiveContentDetected.PolicyViolation', "
+            "'message': 'server message. Request id: request-123', "
+            "'param': '', 'type': 'BadRequestError'}}"
+        )
+
+        class FailingImageClient(DummyImageClient):
+            def generate_image(self, text, images=None):
+                raise RuntimeError(raw_error)
+
+        credentials = {
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            "api_key": "doubao-key",
+            "model": "doubao-seedream-5-0-pro-260628",
+        }
+        with (
+            patch.object(
+                web_app.config_manager,
+                "get_image_provider_config",
+                return_value=credentials,
+            ),
+            patch.object(
+                web_app.config_manager, "set_active_image_selection", return_value=True
+            ),
+            patch.object(
+                web_app.config_manager, "save_image_generation_options", return_value=True
+            ),
+            patch.object(
+                web_app,
+                "create_image_provider_from_credentials",
+                return_value=FailingImageClient(),
+            ),
+        ):
+            response = self.client.post(
+                "/api/generate-image",
+                json={
+                    "prompt": "test prompt",
+                    "provider": "doubao_image",
+                    "model": "doubao-seedream-5-0-pro-260628",
+                    "options": {},
+                },
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.get_json()["error"], raw_error)
 
 
 if __name__ == "__main__":

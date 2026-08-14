@@ -48,6 +48,18 @@ IMAGE_PROVIDER_META: dict[str, dict[str, Any]] = {
         "default_model": "qwen-image-3.0-pro",
         "default_base_url": "",
     },
+    "doubao_image": {
+        "label": "豆包 Seedream",
+        "config_keys": {
+            "base_url": "doubao_image_base_url",
+            "api_key": "doubao_image_api_key",
+            "model": "doubao_image_model",
+        },
+        "url_placeholder": "https://ark.cn-beijing.volces.com/api/v3",
+        "model_suggestions": ["doubao-seedream-5-0-pro-260628"],
+        "default_model": "doubao-seedream-5-0-pro-260628",
+        "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+    },
 }
 
 

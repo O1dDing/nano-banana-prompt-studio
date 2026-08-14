@@ -1761,7 +1761,7 @@ class PromptGeneratorApp(QMainWindow):
 
     def _on_generation_error(self, message: str):
         """生成错误"""
-        self._set_image_status(f"生成失败：{message}", "#ff4d4f")
+        self._set_image_status("生成失败，悬停查看错误详情", "#ff4d4f", message)
         self.preview_area.setText("生成失败，请调整参数后重试")
         # 禁用点击预览功能
         self._enable_image_preview(False)
@@ -1806,9 +1806,15 @@ class PromptGeneratorApp(QMainWindow):
         else:
             self._set_image_status(f"图片已保存到 {file_path}", "#52c41a")
 
-    def _set_image_status(self, text: str, color: str = "#757575"):
+    def _set_image_status(
+        self,
+        text: str,
+        color: str = "#757575",
+        tooltip: str = "",
+    ):
         """设置状态文本"""
         self.image_status_label.setText(text)
+        self.image_status_label.setToolTip(tooltip)
         self.image_status_label.setStyleSheet(f"color: {color}; font-size: 12px;")
 
     def _open_ai_config_dialog(self):

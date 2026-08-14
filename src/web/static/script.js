@@ -182,6 +182,9 @@ const elements = {
     configQwenImageBaseUrl: document.getElementById('configQwenImageBaseUrl'),
     configQwenImageApiKey: document.getElementById('configQwenImageApiKey'),
     configQwenImageModel: document.getElementById('configQwenImageModel'),
+    configDoubaoImageBaseUrl: document.getElementById('configDoubaoImageBaseUrl'),
+    configDoubaoImageApiKey: document.getElementById('configDoubaoImageApiKey'),
+    configDoubaoImageModel: document.getElementById('configDoubaoImageModel'),
 
     saveConfigBtn: document.getElementById('saveConfigBtn')
 };
@@ -634,6 +637,11 @@ function openConfigModal() {
     elements.configQwenImageBaseUrl.value = state.config.qwen_image_base_url || '';
     elements.configQwenImageApiKey.value = '';
     elements.configQwenImageModel.value = state.config.qwen_image_model || 'qwen-image-3.0-pro';
+    elements.configDoubaoImageBaseUrl.value = state.config.doubao_image_base_url
+        || 'https://ark.cn-beijing.volces.com/api/v3';
+    elements.configDoubaoImageApiKey.value = '';
+    elements.configDoubaoImageModel.value = state.config.doubao_image_model
+        || 'doubao-seedream-5-0-pro-260628';
     updateImageConfigVisibility();
 
     elements.configModal.classList.add('active');
@@ -649,7 +657,9 @@ async function saveConfigs() {
         openai_image_base_url: elements.configOpenAIImageBaseUrl.value,
         openai_image_model: elements.configOpenAIImageModel.value,
         qwen_image_base_url: elements.configQwenImageBaseUrl.value,
-        qwen_image_model: elements.configQwenImageModel.value
+        qwen_image_model: elements.configQwenImageModel.value,
+        doubao_image_base_url: elements.configDoubaoImageBaseUrl.value,
+        doubao_image_model: elements.configDoubaoImageModel.value
     };
     if (elements.configApiKey.value) {
         payload.api_key = elements.configApiKey.value;
@@ -662,6 +672,9 @@ async function saveConfigs() {
     }
     if (elements.configQwenImageApiKey.value) {
         payload.qwen_image_api_key = elements.configQwenImageApiKey.value;
+    }
+    if (elements.configDoubaoImageApiKey.value) {
+        payload.doubao_image_api_key = elements.configDoubaoImageApiKey.value;
     }
 
     try {
@@ -1441,6 +1454,7 @@ async function generateImage() {
 
     // 生成中状态：骨架屏 + 实时耗时反馈
     const genBtnDefaultHtml = elements.generateImageBtn.innerHTML;
+    elements.resultPreview.classList.remove('has-error');
     elements.resultPreview.replaceChildren();
     const generatingState = document.createElement('div');
     generatingState.className = 'generating-state';
@@ -1499,16 +1513,18 @@ async function generateImage() {
 
     } catch (e) {
         showToast('生成错误: ' + e.message, 'error');
+        elements.resultPreview.classList.add('has-error');
         const errorState = document.createElement('div');
-        errorState.className = 'empty-state';
-        const title = document.createElement('p');
-        title.style.color = 'var(--error-color)';
+        errorState.className = 'generation-error';
+        errorState.setAttribute('role', 'alert');
+        const title = document.createElement('strong');
+        title.className = 'generation-error-title';
         title.textContent = '生成失败';
-        const hint = document.createElement('p');
-        hint.className = 'hint';
-        hint.textContent = e.message;
+        const message = document.createElement('p');
+        message.className = 'generation-error-message';
+        message.textContent = e.message;
         errorState.appendChild(title);
-        errorState.appendChild(hint);
+        errorState.appendChild(message);
         elements.resultPreview.replaceChildren(errorState);
     } finally {
         stopTimer();

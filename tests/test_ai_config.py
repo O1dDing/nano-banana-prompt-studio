@@ -126,12 +126,13 @@ class AIConfigManagerTests(unittest.TestCase):
                 "gemini_api_key": " gemini-key ",
                 "openai_image_api_key": "   ",
                 "qwen_image_api_key": "qwen-key",
+                "doubao_image_api_key": "doubao-key",
             }
         )
 
         self.assertEqual(
             self.manager.get_image_providers_with_api_key(),
-            ["gemini", "qwen_image"],
+            ["gemini", "qwen_image", "doubao_image"],
         )
 
     def test_model_capability_override_does_not_mutate_provider_defaults(self):
@@ -159,6 +160,22 @@ class AIConfigManagerTests(unittest.TestCase):
         )
         qwen_options = get_image_provider_capabilities("qwen_image")["options"]
         self.assertNotIn("watermark", qwen_options)
+
+    def test_doubao_defaults_and_generation_options(self):
+        credentials = self.manager.get_image_provider_config("doubao_image")
+        self.assertEqual(
+            credentials["base_url"],
+            "https://ark.cn-beijing.volces.com/api/v3",
+        )
+        self.assertEqual(
+            credentials["model"],
+            "doubao-seedream-5-0-pro-260628",
+        )
+
+        options = get_image_provider_capabilities("doubao_image")["options"]
+        self.assertEqual(options["image_size"]["values"], ["1K", "1.5K", "2K"])
+        self.assertEqual(options["output_format"]["values"], ["png", "jpeg"])
+        self.assertEqual(options["watermark"]["default"], "false")
 
 
 if __name__ == "__main__":

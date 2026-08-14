@@ -25,6 +25,9 @@ class AIConfigManager:
         "qwen_image_base_url": "",
         "qwen_image_api_key": "",
         "qwen_image_model": "qwen-image-3.0-pro",
+        "doubao_image_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "doubao_image_api_key": "",
+        "doubao_image_model": "doubao-seedream-5-0-pro-260628",
         "image_generation_options": {},
     }
     
@@ -191,6 +194,16 @@ class AIConfigManager:
             "base_url": config.get("qwen_image_base_url", ""),
             "api_key": config.get("qwen_image_api_key", ""),
             "model": config.get("qwen_image_model", "") or "qwen-image-3.0-pro",
+        }
+
+    def get_doubao_image_config(self) -> dict:
+        config = self.load_config()
+        return {
+            "base_url": config.get("doubao_image_base_url", "")
+            or "https://ark.cn-beijing.volces.com/api/v3",
+            "api_key": config.get("doubao_image_api_key", ""),
+            "model": config.get("doubao_image_model", "")
+            or "doubao-seedream-5-0-pro-260628",
         }
 
     def get_active_image_config(
