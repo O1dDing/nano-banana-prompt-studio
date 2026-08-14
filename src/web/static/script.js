@@ -132,6 +132,9 @@ const elements = {
 
     // 生图区域
     activeImageProvider: document.getElementById('activeImageProvider'),
+    imageProviderStatus: document.getElementById('imageProviderStatus'),
+    imageProviderStatusButton: document.getElementById('imageProviderStatusButton'),
+    imageProviderStatusPopover: document.getElementById('imageProviderStatusPopover'),
     imageProviderSelect: document.getElementById('imageProviderSelect'),
     imageModelSelect: document.getElementById('imageModelSelect'),
     imageProviderOptions: document.getElementById('imageProviderOptions'),
@@ -691,7 +694,7 @@ function getActiveImageModel() {
 
 function getAvailableImageProviders() {
     return Object.entries(state.imageProviders || {})
-        .filter(([, config]) => config.has_api_key);
+        .filter(([, config]) => config.is_configured);
 }
 
 async function renderImageGenerationControls(preferredProvider = '') {
@@ -849,17 +852,54 @@ async function saveImageGenerationSettings(includeOptions, quiet) {
     }
 }
 
+function renderImageProviderStatus() {
+    const providers = Object.values(state.imageProviders || {});
+    const configuredProviders = providers.filter(config => config.is_configured);
+    const unconfiguredCount = providers.length - configuredProviders.length;
+
+    elements.activeImageProvider.hidden = configuredProviders.length > 0;
+    elements.activeImageProvider.textContent = configuredProviders.length === 0
+        ? '尚未配置图片渠道，请点击右上角“设置”添加渠道密钥'
+        : '';
+    elements.imageProviderStatusButton.hidden = configuredProviders.length === 0;
+    elements.imageProviderStatusButton.setAttribute(
+        'aria-label',
+        `图片渠道状态：${configuredProviders.length} 个已配置，${unconfiguredCount} 个未配置`
+    );
+
+    const popover = elements.imageProviderStatusPopover;
+    popover.replaceChildren();
+    const title = document.createElement('strong');
+    title.className = 'provider-status-title';
+    title.textContent = '图片渠道状态';
+    popover.appendChild(title);
+    providers.forEach(config => {
+        const row = document.createElement('div');
+        row.className = `provider-status-row${config.is_configured ? ' is-configured' : ''}`;
+        const dot = document.createElement('span');
+        dot.className = 'provider-status-dot';
+        dot.setAttribute('aria-hidden', 'true');
+        const label = document.createElement('span');
+        label.textContent = config.label;
+        const value = document.createElement('span');
+        value.textContent = config.is_configured ? '已配置' : '未配置';
+        row.append(dot, label, value);
+        popover.appendChild(row);
+    });
+}
+
+function setImageProviderStatusOpen(open) {
+    if (elements.imageProviderStatusButton.hidden) open = false;
+    elements.imageProviderStatus.classList.toggle('is-open', open);
+    elements.imageProviderStatusButton.setAttribute('aria-expanded', String(open));
+}
+
 function updateImageGenerationAvailability() {
     const provider = getActiveImageProvider();
     const providerConfig = state.imageProviders[provider];
     const ready = Boolean(providerConfig?.is_configured && getActiveImageModel());
-    const hasAnyProvider = getAvailableImageProviders().length > 0;
 
-    elements.activeImageProvider.hidden = ready;
-    elements.activeImageProvider.classList.toggle('is-warning', !ready);
-    elements.activeImageProvider.textContent = !hasAnyProvider
-        ? '请先在 AI 配置中填写图片渠道密钥'
-        : '当前图片渠道配置不完整，请检查 Base URL、密钥和模型';
+    renderImageProviderStatus();
     elements.generateImageBtn.disabled = state.isGenerating || !ready;
 }
 
@@ -1533,6 +1573,47 @@ function init() {
     elements.configImageProvider.addEventListener('change', () => {
         updateImageConfigVisibility();
     });
+    elements.imageProviderStatusButton.addEventListener('pointerenter', event => {
+        if (event.pointerType === 'mouse') {
+            elements.imageProviderStatus.classList.remove('is-touch-input');
+        }
+    });
+    elements.imageProviderStatusButton.addEventListener('pointerdown', event => {
+        elements.imageProviderStatus.classList.toggle('is-touch-input', event.pointerType !== 'mouse');
+        elements.imageProviderStatusButton.dataset.openOnPointerDown =
+            elements.imageProviderStatusButton.getAttribute('aria-expanded');
+    });
+    elements.imageProviderStatusButton.addEventListener('click', event => {
+        event.stopPropagation();
+        const wasOpen = elements.imageProviderStatusButton.dataset.openOnPointerDown;
+        const isOpen = elements.imageProviderStatusButton.getAttribute('aria-expanded') === 'true';
+        const nextOpen = event.detail > 0 && wasOpen !== undefined
+            ? wasOpen !== 'true'
+            : !isOpen;
+        delete elements.imageProviderStatusButton.dataset.openOnPointerDown;
+        setImageProviderStatusOpen(nextOpen);
+    });
+    elements.imageProviderStatusButton.addEventListener('focus', () => {
+        setImageProviderStatusOpen(true);
+    });
+    elements.imageProviderStatusButton.addEventListener('blur', () => {
+        window.setTimeout(() => {
+            if (!elements.imageProviderStatus.contains(document.activeElement)) {
+                setImageProviderStatusOpen(false);
+            }
+        }, 0);
+    });
+    elements.imageProviderStatusButton.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+            setImageProviderStatusOpen(false);
+            elements.imageProviderStatusButton.blur();
+        }
+    });
+    document.addEventListener('click', event => {
+        if (!elements.imageProviderStatus.contains(event.target)) {
+            setImageProviderStatusOpen(false);
+        }
+    });
     elements.imageProviderSelect.addEventListener('change', async () => {
         state.activeImageProvider = elements.imageProviderSelect.value;
         renderImageModelChoices(state.activeImageProvider);
@@ -1626,7 +1707,6 @@ function init() {
     // Load presets logic
     loadPresets();
     initCategoryPresets();
-    updateFieldSuggestions();
 
     // Init Advanced Settings
     initAdvancedSettings();
@@ -1655,7 +1735,6 @@ function init() {
         });
         showToast('保存成功');
         loadPresets();
-        updateFieldSuggestions();
     });
 
     // Delete Preset
@@ -1666,7 +1745,6 @@ function init() {
         await fetch(`/api/presets/${name}`, { method: 'DELETE' });
         showToast('删除成功');
         loadPresets();
-        updateFieldSuggestions();
     });
 }
 
@@ -1684,7 +1762,7 @@ async function initAdvancedSettings() {
         elements.lineArtGroup.style.display = enabled ? 'block' : 'none';
         
         // Disable other inputs
-        const allInputs = document.querySelectorAll('.app-container input, .app-container textarea, .app-container select');
+        const allInputs = document.querySelectorAll('.field-control input, .field-control textarea, .field-control button, #negativePromptEnabled, #negativePromptInput, #negativeTagInput');
         allInputs.forEach(el => {
             // Skip control buttons/checkboxes and special req
             if (el.id === 'lineArtModeEnabled' || 
@@ -1873,38 +1951,6 @@ async function loadPresets() {
     } catch (e) { console.error(e); }
 }
 
-// ========================================
-// Field Suggestions from Presets
-// ========================================
-const fieldPresetPaths = {
-    styleMode: ["风格模式"],
-    atmosphere: ["画面气质"],
-    location: ["场景", "环境", "地点设定"],
-    lighting: ["场景", "环境", "光线"],
-    weather: ["场景", "环境", "天气氛围"],
-    description: ["场景", "主体", "整体描述"],
-    bodyShape: ["场景", "主体", "外形特征", "身材"],
-    face: ["场景", "主体", "外形特征", "面部"],
-    hair: ["场景", "主体", "外形特征", "头发"],
-    eyes: ["场景", "主体", "外形特征", "眼睛"],
-    emotion: ["场景", "主体", "表情与动作", "情绪"],
-    action: ["场景", "主体", "表情与动作", "动作"],
-    clothing: ["场景", "主体", "服装", "穿着"],
-    clothingDetails: ["场景", "主体", "服装", "细节"],
-    accessories: ["场景", "主体", "配饰"],
-    background: ["场景", "背景", "描述"],
-    depth: ["场景", "背景", "景深"],
-    angle: ["相机", "机位角度"],
-    composition: ["相机", "构图"],
-    lensCharacteristics: ["相机", "镜头特性"],
-    sensorQuality: ["相机", "传感器画质"],
-    intent: ["审美控制", "呈现意图"],
-    materialRealism: ["审美控制", "材质真实度"],
-    overallTone: ["审美控制", "色彩风格", "整体色调"],
-    contrast: ["审美控制", "色彩风格", "对比度"],
-    specialEffects: ["审美控制", "色彩风格", "特殊效果"],
-};
-
 function getNestedValue(obj, path) {
     let current = obj;
     for (const key of path) {
@@ -1912,79 +1958,6 @@ function getNestedValue(obj, path) {
         current = current[key];
     }
     return current;
-}
-
-async function updateFieldSuggestions() {
-    try {
-        const res = await fetch('/api/presets/details');
-        if (!res.ok) throw new Error(res.statusText);
-        const presetDataList = await res.json();
-
-        for (const [fieldId, path] of Object.entries(fieldPresetPaths)) {
-            const values = new Set();
-            presetDataList.forEach(data => {
-                if (!data) return;
-                const val = getNestedValue(data, path);
-                if (val !== null && val !== undefined) {
-                    const str = Array.isArray(val) ? val.join(', ') : String(val);
-                    if (str.trim()) values.add(str.trim());
-                }
-            });
-
-            const el = document.getElementById(fieldId);
-            if (!el) continue;
-
-            if (el.tagName === 'INPUT') {
-                const datalistId = `dl-${fieldId}`;
-                let datalist = document.getElementById(datalistId);
-                if (values.size === 0) {
-                    if (datalist) { datalist.remove(); el.removeAttribute('list'); }
-                    continue;
-                }
-                if (!datalist) {
-                    datalist = document.createElement('datalist');
-                    datalist.id = datalistId;
-                    document.body.appendChild(datalist);
-                }
-                datalist.innerHTML = '';
-                values.forEach(v => {
-                    const opt = document.createElement('option');
-                    opt.value = v;
-                    datalist.appendChild(opt);
-                });
-                el.setAttribute('list', datalistId);
-            } else if (el.tagName === 'TEXTAREA') {
-                const selectId = `ps-${fieldId}`;
-                let select = document.getElementById(selectId);
-                if (values.size === 0) {
-                    if (select) select.remove();
-                    continue;
-                }
-                if (!select) {
-                    select = document.createElement('select');
-                    select.id = selectId;
-                    select.className = 'preset-suggest-select';
-                    select.addEventListener('change', () => {
-                        if (select.value) {
-                            el.value = select.value;
-                            el.dispatchEvent(new Event('input'));
-                            select.value = '';
-                        }
-                    });
-                    el.parentNode.insertBefore(select, el.nextSibling);
-                }
-                select.innerHTML = '<option value="">从预设选择...</option>';
-                values.forEach(v => {
-                    const opt = document.createElement('option');
-                    opt.value = v;
-                    opt.textContent = v.length > 50 ? v.substring(0, 50) + '...' : v;
-                    select.appendChild(opt);
-                });
-            }
-        }
-    } catch (e) {
-        console.error('Failed to update field suggestions:', e);
-    }
 }
 
 document.addEventListener('DOMContentLoaded', init);

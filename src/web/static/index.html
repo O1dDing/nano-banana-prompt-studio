@@ -1,502 +1,112 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KUON的生图工具</title>
-    <meta name="description" content="AI绘画提示词生成与生图工具">
+    <title>Nano Banana Studio</title>
+    <meta name="description" content="通过结构化提示词控制多渠道图片生成质量">
     <link rel="stylesheet" href="/static/style.css">
 </head>
-
 <body>
-    <!-- 主容器 -->
-    <div class="app-container">
-        <!-- 侧边栏遮罩层 (移动端) -->
+<div class="app-container">
+    <header class="app-header">
+        <button class="sidebar-toggle-btn" id="sidebarToggleBtn" type="button" aria-label="打开结构导航"><span></span><span></span><span></span></button>
+        <div class="brand-block"><span class="brand-mark">N</span><div class="brand-copy"><strong>Nano Banana Studio</strong><span>结构化提示词工作台</span></div></div>
+        <div class="project-preset-bar"><label for="presetSelect">当前配方</label><select id="presetSelect" class="select-input"><option value="">选择整套预设...</option></select><button id="savePresetBtn" class="icon-text-btn" type="button">保存</button><button id="deletePresetBtn" class="icon-btn danger-ghost" type="button" aria-label="删除当前预设">×</button></div>
+        <div class="header-actions"><button id="aiGenerateOpenBtn" class="btn btn-ai btn-sm" type="button">AI 生成字段</button><button id="aiModifyOpenBtn" class="btn btn-secondary btn-sm" type="button">AI 修改字段</button><button id="resetFormBtn" class="btn btn-ghost btn-sm" type="button">清空</button><button id="configBtn" class="btn btn-secondary btn-sm" type="button">设置</button></div>
+    </header>
+
+    <div class="workspace-shell">
         <div class="sidebar-overlay" id="sidebarOverlay"></div>
-        <!-- 侧边栏 -->
         <aside class="sidebar" id="sidebar">
-            <div class="sidebar-header">
-                <div class="logo">
-                    <h1>KUON的生图工具</h1>
-                </div>
-            </div>
-
-            <!-- 预设管理 (Moved to Main Tabs) -->
-            <!-- 生成设置 (Moved from Main) -->
-            <div class="section">
-                <h2 class="section-title">生成设置</h2>
-                <div class="gen-controls">
-                    <div class="image-selection-grid">
-                        <div class="form-group">
-                            <label for="imageProviderSelect">渠道</label>
-                            <select id="imageProviderSelect" class="select-input"></select>
-                        </div>
-                        <div class="form-group">
-                            <label for="imageModelSelect">模型</label>
-                            <select id="imageModelSelect" class="select-input"></select>
-                        </div>
-                        <div id="activeImageProvider" class="provider-status" role="status">
-                            正在加载图片渠道...
-                        </div>
-                    </div>
-                    <div id="imageProviderOptions"></div>
-
-                    <!-- 参考图片 -->
-                    <div class="form-group">
-                        <label>参考图片 (可选)</label>
-                        <div class="image-upload-area"
-                            style="padding: 10px; border: 1px dashed var(--border-color); border-radius: 8px;">
-                            <input type="file" id="imageInput" accept="image/*" multiple style="display: none;">
-                            <button id="uploadImageBtn" class="btn btn-secondary btn-sm" style="width: 100%;">📤
-                                上传参考图</button>
-                            <div id="imagePreview" class="image-preview"
-                                style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap;"></div>
-                        </div>
-                    </div>
-
-                    <!-- 生成按钮 -->
-                    <button id="generateImageBtn" class="btn btn-primary sidebar-btn">
-                        生成图片
-                    </button>
-                </div>
-            </div>
+            <div class="completion-block"><div class="completion-row"><span>提示词完整度</span><strong id="promptProgressText">0 / 26</strong></div><div class="completion-track"><span id="promptProgressFill"></span></div></div>
+            <p class="nav-eyebrow">结构化提示词</p>
+            <nav class="structure-nav" aria-label="提示词分类">
+                <button class="tab-btn active" data-tab="basic" type="button"><span class="nav-marker basic"></span><span>基础设置</span><small data-count-scope="basic">0/2</small></button>
+                <button class="tab-btn" data-tab="scene" type="button"><span class="nav-marker scene"></span><span>场景设置</span><small data-count-scope="scene">0/5</small></button>
+                <button class="tab-btn" data-tab="subject" type="button"><span class="nav-marker subject"></span><span>主体细节</span><small data-count-scope="subject">0/10</small></button>
+                <button class="tab-btn" data-tab="camera" type="button"><span class="nav-marker camera"></span><span>相机与构图</span><small data-count-scope="camera">0/4</small></button>
+                <button class="tab-btn" data-tab="aesthetic" type="button"><span class="nav-marker aesthetic"></span><span>调色与质感</span><small data-count-scope="aesthetic">0/5</small></button>
+            </nav>
+            <p class="nav-eyebrow nav-eyebrow-spaced">扩展控制</p>
+            <nav class="structure-nav utility-nav"><button class="tab-btn" data-tab="advanced" type="button"><span class="nav-marker advanced"></span><span>高级设置</span><small id="advancedStatusCount">1 项启用</small></button><button class="tab-btn" data-tab="presets" type="button"><span class="nav-marker presets"></span><span>预设管理</span><small>整套配置</small></button></nav>
+            <div class="sidebar-note"><strong>字段值会实时组成 JSON</strong><span>生成图片时将完整结构原样提交给当前模型。</span></div>
         </aside>
 
-        <!-- 主内容区 -->
         <main class="main-content">
-            <!-- 顶部工具栏 -->
-            <div class="tools-bar">
-                <button class="sidebar-toggle-btn" id="sidebarToggleBtn" title="生成设置">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="3" y1="6" x2="21" y2="6"></line>
-                        <line x1="3" y1="12" x2="21" y2="12"></line>
-                        <line x1="3" y1="18" x2="21" y2="18"></line>
-                    </svg>
-                </button>
-                <span class="toolbar-title">画面元素配置</span>
-                <div class="sub-tools">
-                    <button id="configBtn" class="btn btn-secondary btn-sm">设置</button>
-                    <button id="resetFormBtn" class="btn btn-secondary btn-sm">清空</button>
-                    <button id="aiGenerateOpenBtn" class="btn btn-secondary btn-sm">AI 生成提示词</button>
-                    <button id="aiModifyOpenBtn" class="btn btn-secondary btn-sm">AI 修改提示词</button>
+            <section class="editor-workspace">
+                <div class="editor-heading"><div><span class="editor-kicker" id="editorKicker">第 1 组 · 2 项约束</span><h1 id="editorTitle">基础设置</h1><p id="editorDescription">先确定整张图的视觉语言与情绪方向。</p></div><span class="editor-save-state" id="editorSaveState">实时同步</span></div>
+                <div class="tab-content-container">
+                    <div id="tab-presets" class="tab-panel" data-title="预设管理" data-description="加载、保存或删除整套结构化提示词配置。"><div class="preset-manager-panel"><div><span class="panel-eyebrow">整套提示词预设</span><h2>复用完整创作配方</h2><p>整套预设会同时恢复结构字段、反向提示词及高级开关；分类预设只覆盖当前分类。</p></div><div class="preset-manager-controls"><select class="select-input preset-select-mirror"><option value="">选择整套预设...</option></select><button class="btn btn-primary preset-save-mirror" type="button">保存当前为新预设</button><button class="btn btn-danger preset-delete-mirror" type="button">删除所选预设</button></div></div></div>
+
+                    <div id="tab-basic" class="tab-panel active" data-title="基础设置" data-description="先确定整张图的视觉语言与情绪方向。"><div class="category-preset-bar" data-preset-scope="basic" data-preset-label="基础设置"></div><div class="form-grid">
+                        <div class="form-group field-control" data-field-name="风格模式"><label for="styleMode">风格模式 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="styleMode" class="text-input" placeholder="例如：高保真二次元插画"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="画面气质"><label for="atmosphere">画面气质 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="atmosphere" class="text-input" placeholder="例如：清透、治愈、静谧"><button class="field-option-manage" type="button">⋯</button></div></div>
+                    </div></div>
+
+                    <div id="tab-scene" class="tab-panel" data-title="场景设置" data-description="约束地点、光线、天气、背景层次与景深。"><div class="category-preset-bar" data-preset-scope="scene" data-preset-label="场景设置"></div><div class="form-grid">
+                        <div class="form-group field-control" data-field-name="地点设定"><label for="location">地点设定 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="location" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="光线"><label for="lighting">光线 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="lighting" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="天气氛围"><label for="weather">天气氛围 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="weather" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="背景描述"><label for="background">背景描述 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="background" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="景深"><label for="depth">景深 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="depth" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                    </div></div>
+
+                    <div id="tab-subject" class="tab-panel" data-title="主体细节" data-description="逐项锁定主体外观、表情动作与服装一致性。"><div class="category-preset-bar" data-preset-scope="subject" data-preset-label="主体细节"></div><div class="form-grid form-grid-two-column">
+                        <div class="form-group field-control" data-field-name="整体描述"><label for="description">整体描述 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="description" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="身材"><label for="bodyShape">身材 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="bodyShape" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="面部"><label for="face">面部 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="face" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="头发"><label for="hair">头发 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="hair" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="眼睛"><label for="eyes">眼睛 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="eyes" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="情绪"><label for="emotion">情绪 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="emotion" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="动作"><label for="action">动作 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="action" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="穿着"><label for="clothing">穿着 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="clothing" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="服装细节"><label for="clothingDetails">服装细节 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="clothingDetails" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="配饰"><label for="accessories">配饰 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="accessories" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                    </div></div>
+
+                    <div id="tab-camera" class="tab-panel" data-title="相机与构图" data-description="用摄影语言约束观察位置、主体关系与画面清晰度。"><div class="category-preset-bar" data-preset-scope="camera" data-preset-label="相机与构图"></div><div class="form-grid">
+                        <div class="form-group field-control" data-field-name="机位角度"><label for="angle">机位角度 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="angle" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="构图"><label for="composition">构图 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="composition" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="镜头特性"><label for="lensCharacteristics">镜头特性 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="lensCharacteristics" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="传感器画质"><label for="sensorQuality">传感器画质 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="sensorQuality" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                    </div></div>
+
+                    <div id="tab-aesthetic" class="tab-panel" data-title="调色与质感" data-description="控制最终成片的材质表现、色调与后期效果。"><div class="category-preset-bar" data-preset-scope="aesthetic" data-preset-label="调色与质感"></div><div class="form-grid">
+                        <div class="form-group field-control" data-field-name="材质真实度"><label for="materialRealism">材质真实度 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="materialRealism" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="呈现意图"><label for="intent">呈现意图 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="intent" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="特殊效果"><label for="specialEffects">后期效果 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="specialEffects" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="整体色调"><label for="overallTone">整体色调 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="overallTone" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                        <div class="form-group field-control" data-field-name="对比度"><label for="contrast">对比度 <span class="field-state">待填写</span></label><div class="field-input-row"><input type="text" id="contrast" class="text-input"><button class="field-option-manage" type="button">⋯</button></div></div>
+                    </div></div>
+
+                    <div id="tab-advanced" class="tab-panel" data-title="高级设置" data-description="处理反向约束、额外要求与专用线稿工作流。"><div class="advanced-stack">
+                        <section class="advanced-section"><div class="switch-heading"><div><strong>反向提示词</strong><span>默认排除水印、签名和文字，可复用自定义标签。</span></div><label class="switch-control"><input type="checkbox" id="negativePromptEnabled" style="margin-right: 8px;" checked><span></span></label></div><div id="negativePromptGroup" class="advanced-content" style="display: flex; flex-direction: column; gap: 10px;"><div class="form-group"><label for="negativeTagInput">常用标签</label><div class="negative-tag-editor"><input type="text" id="negativeTagInput" class="text-input" placeholder="输入新标签..."><button type="button" id="addNegativeTagBtn" class="btn btn-secondary btn-sm negative-tag-add" aria-label="添加标签">+</button></div><div id="negativeTagsContainer" class="negative-tags"><span class="muted-text">加载中...</span></div></div><div class="form-group"><label for="negativePromptInput">当前反向提示词</label><textarea id="negativePromptInput" class="textarea-input" rows="3" placeholder="请输入反向提示词...">水印、签名、文字</textarea></div></div></section>
+                        <section class="advanced-section"><div class="switch-heading"><div><strong>特别要求</strong><span>不参与 AI 生成和修改，仅在最终生图时追加。</span></div><label class="switch-control"><input type="checkbox" id="specialRequirementEnabled"><span></span></label></div><div id="specialRequirementGroup" class="advanced-content" style="display: none;"><textarea id="specialRequirementInput" class="textarea-input" rows="3"></textarea></div></section>
+                        <section class="advanced-section"><div class="switch-heading"><div><strong>角色线稿模式</strong><span>启用后使用专用线稿提示词，并停用其他结构字段。</span></div><label class="switch-control"><input type="checkbox" id="lineArtModeEnabled"><span></span></label></div><div id="lineArtGroup" class="advanced-content" style="display: none;"><textarea id="lineArtPromptInput" class="textarea-input" rows="5"></textarea><div class="align-end"><button id="saveLineArtPromptBtn" class="btn btn-secondary btn-sm" type="button">保存线稿提示词</button></div></div></section>
+                    </div></div>
                 </div>
-            </div>
+                <footer class="editor-footer"><button class="btn btn-secondary" id="previousCategoryBtn" type="button">上一组</button><span id="categoryFooterStatus">当前分类的值会自动保存到表单</span><button class="btn btn-primary" id="nextCategoryBtn" type="button">下一组：场景设置</button></footer>
+            </section>
 
-            <!-- 配置 Tabs -->
-            <div class="tabs-nav">
-                <button class="tab-btn" data-tab="presets">预设管理</button>
-                <button class="tab-btn active" data-tab="basic">基础设置</button>
-                <button class="tab-btn" data-tab="scene">场景描绘</button>
-                <button class="tab-btn" data-tab="subject">主体特征</button>
-                <button class="tab-btn" data-tab="camera">相机镜头</button>
-                <button class="tab-btn" data-tab="aesthetic">调色与质感</button>
-                <button class="tab-btn" data-tab="advanced">高级设置</button>
-            </div>
-
-            <!-- Tab 内容区 (Moved from Sidebar) -->
-            <div class="tab-content-container">
-
-                <!-- 预设管理 -->
-                <div id="tab-presets" class="tab-panel">
-                    <div class="form-grid">
-                        <div class="form-group" style="grid-column: span 2;">
-                            <label>选择与管理预设</label>
-                            <div style="display: flex; gap: 10px; align-items: center;">
-                                <select id="presetSelect" class="select-input" style="flex: 1;">
-                                    <option value="">选择预设...</option>
-                                </select>
-                                <button id="savePresetBtn" class="btn btn-secondary" title="保存当前配置为新预设">
-                                    保存预设
-                                </button>
-                                <button id="deletePresetBtn" class="btn btn-danger" title="删除当前选中的预设">
-                                    删除
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 基础设置 -->
-                <div id="tab-basic" class="tab-panel active">
-                    <div class="category-preset-bar" data-preset-scope="basic" data-preset-label="基础设置"></div>
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label for="styleMode">风格模式</label>
-                            <input type="text" id="styleMode" class="text-input" placeholder="例如：高保真二次元插画">
-                        </div>
-                        <div class="form-group">
-                            <label for="atmosphere">画面气质</label>
-                            <input type="text" id="atmosphere" class="text-input" placeholder="例如：清透, 治愈">
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 场景设置 -->
-                <div id="tab-scene" class="tab-panel">
-                    <div class="category-preset-bar" data-preset-scope="scene" data-preset-label="场景设置"></div>
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label for="location">地点设定</label>
-                            <textarea id="location" class="textarea-input" rows="3"></textarea>
-                        </div>
-                        <div class="form-group">
-                            <label for="lighting">光线</label>
-                            <input type="text" id="lighting" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="weather">天气氛围</label>
-                            <input type="text" id="weather" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="background">背景描述</label>
-                            <textarea id="background" class="textarea-input" rows="3"></textarea>
-                        </div>
-                        <div class="form-group">
-                            <label for="depth">景深</label>
-                            <input type="text" id="depth" class="text-input">
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 主体设置 -->
-                <div id="tab-subject" class="tab-panel">
-                    <div class="category-preset-bar" data-preset-scope="subject" data-preset-label="主体特征"></div>
-                    <div class="form-grid">
-                        <div class="form-group" style="grid-column: span 2;">
-                            <label for="description">整体描述</label>
-                            <textarea id="description" class="textarea-input" rows="2"></textarea>
-                        </div>
-                        <div class="form-group">
-                            <label for="bodyShape">身材</label>
-                            <input type="text" id="bodyShape" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="face">面部</label>
-                            <input type="text" id="face" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="hair">头发</label>
-                            <input type="text" id="hair" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="eyes">眼睛</label>
-                            <input type="text" id="eyes" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="emotion">情绪</label>
-                            <input type="text" id="emotion" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="action">动作</label>
-                            <textarea id="action" class="textarea-input" rows="2"></textarea>
-                        </div>
-                        <div class="form-group">
-                            <label for="clothing">穿着</label>
-                            <input type="text" id="clothing" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="clothingDetails">服装细节</label>
-                            <input type="text" id="clothingDetails" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="accessories">配饰</label>
-                            <input type="text" id="accessories" class="text-input">
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 相机设置 -->
-                <div id="tab-camera" class="tab-panel">
-                    <div class="category-preset-bar" data-preset-scope="camera" data-preset-label="相机镜头"></div>
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label for="angle">机位角度</label>
-                            <input type="text" id="angle" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="composition">构图</label>
-                            <input type="text" id="composition" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="lensCharacteristics">镜头特性</label>
-                            <input type="text" id="lensCharacteristics" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="sensorQuality">传感器画质</label>
-                            <input type="text" id="sensorQuality" class="text-input">
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 调色与质感 -->
-                <div id="tab-aesthetic" class="tab-panel">
-                    <div class="category-preset-bar" data-preset-scope="aesthetic" data-preset-label="调色与质感"></div>
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label for="intent">呈现意图</label>
-                            <input type="text" id="intent" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="materialRealism">材质真实度</label>
-                            <textarea id="materialRealism" class="textarea-input" rows="2"></textarea>
-                        </div>
-                        <div class="form-group">
-                            <label for="overallTone">整体色调</label>
-                            <input type="text" id="overallTone" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="contrast">对比度</label>
-                            <input type="text" id="contrast" class="text-input">
-                        </div>
-                        <div class="form-group">
-                            <label for="specialEffects">后期效果</label>
-                            <input type="text" id="specialEffects" class="text-input">
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 高级设置 -->
-                <div id="tab-advanced" class="tab-panel">
-                    <div class="form-grid" style="display: flex; flex-direction: column; gap: 20px;">
-                        
-                        <!-- 特别要求 -->
-                        <div class="advanced-section">
-                            <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                                <input type="checkbox" id="specialRequirementEnabled" style="margin-right: 8px;">
-                                <label for="specialRequirementEnabled" style="font-weight: 600; margin-bottom: 0;">启用特别要求</label>
-                            </div>
-                            <div id="specialRequirementGroup" style="display: none;">
-                                <textarea id="specialRequirementInput" class="textarea-input" rows="3" placeholder="请输入额外的特别要求，这些内容不会纳入AI提示词生成和修改，只在生成图片时补充..."></textarea>
-                            </div>
-                        </div>
-
-                        <!-- 角色线稿生成 -->
-                        <div class="advanced-section">
-                            <div style="display: flex; align-items: center; margin-bottom: 5px;">
-                                <input type="checkbox" id="lineArtModeEnabled" style="margin-right: 8px;">
-                                <label for="lineArtModeEnabled" style="font-weight: 600; margin-bottom: 0;">启用角色线稿生成</label>
-                            </div>
-                            <p style="font-size: 12px; color: var(--text-tertiary); margin-bottom: 10px; margin-left: 24px;">启用后，除特别要求外，其他提示词被禁用。</p>
-                            <div id="lineArtGroup" style="display: none;">
-                                <textarea id="lineArtPromptInput" class="textarea-input" rows="5" placeholder="请输入角色线稿生成的提示词..."></textarea>
-                                <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
-                                    <button id="saveLineArtPromptBtn" class="btn btn-secondary btn-sm">保存提示词</button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- 反向提示词 -->
-                        <div class="advanced-section">
-                            <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                                <input type="checkbox" id="negativePromptEnabled" style="margin-right: 8px;" checked>
-                                <label for="negativePromptEnabled" style="font-weight: 600; margin-bottom: 0;">启用反向提示词</label>
-                            </div>
-                            <div id="negativePromptGroup" style="display: flex; flex-direction: column; gap: 10px;">
-                                <div class="form-group">
-                                    <label for="negativeTagInput">标签管理</label>
-                                    <div class="negative-tag-editor">
-                                        <input type="text" id="negativeTagInput" class="text-input" placeholder="输入新标签...">
-                                        <button type="button" id="addNegativeTagBtn" class="btn btn-secondary btn-sm negative-tag-add" title="添加标签" aria-label="添加标签">+</button>
-                                    </div>
-                                    <div id="negativeTagsContainer" class="negative-tags">
-                                        <span style="color: var(--text-tertiary);">加载中...</span>
-                                    </div>
-                                </div>
-                                <div class="form-group">
-                                    <label for="negativePromptInput">提示词</label>
-                                    <textarea id="negativePromptInput" class="textarea-input" rows="3" placeholder="请输入反向提示词...">水印、签名、文字</textarea>
-                                </div>
-                            </div>
-                        </div>
-
-                    </div>
-                </div>
-            </div>
-
-            <!-- Preview Area Split -->
-            <div id="previewAreaRow" class="preview-area-row json-hidden">
-                <!-- JSON Preview (默认隐藏) -->
-                <div id="jsonPreviewPane" class="preview-pane">
-                    <h3>
-                        <span>提示词预览 (JSON)</span>
-                        <span>
-                            <button id="copyJsonBtn" class="btn btn-ghost btn-sm" style="padding: 2px 8px;">📋 复制</button>
-                            <button type="button" id="jsonPreviewHideBtn" class="btn btn-ghost btn-sm" style="padding: 2px 8px;">🔽 隐藏</button>
-                        </span>
-                    </h3>
-                    <textarea id="jsonPreviewText" class="textarea-input" readonly
-                        style="font-family: monospace; font-size: 12px; background: var(--bg-secondary); resize: none;"></textarea>
-                </div>
-
-                <!-- Result Preview -->
-                <div class="preview-pane">
-                    <h3>
-                        <span>生成结果</span>
-                        <button type="button" id="jsonPreviewToggleBtn" class="btn btn-ghost btn-sm" style="padding: 2px 8px;">📄 显示JSON预览</button>
-                    </h3>
-                    <div id="resultPreview" class="result-preview" style="min-height: 0;">
-                        <div class="empty-state">
-                            <p style="color: var(--text-tertiary);">预览区域</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
+            <aside class="inspector-panel">
+                <div class="inspector-tabs"><button id="jsonPreviewHideBtn" class="inspector-tab active" type="button" data-inspector="structure">结构</button><button id="jsonPreviewToggleBtn" class="inspector-tab" type="button" data-inspector="json">JSON</button><button id="resultPreviewToggleBtn" class="inspector-tab" type="button" data-inspector="result">结果</button></div>
+                <div id="previewAreaRow" class="preview-area-row json-hidden"><section id="structurePreviewPane" class="inspector-view structure-preview-view"><div class="inspector-view-heading"><div><strong>实时结构</strong><span id="structureReadyState">继续填写约束字段</span></div></div><div id="structurePreview" class="structure-preview"></div></section><section id="jsonPreviewPane" class="inspector-view json-preview-view"><div class="inspector-view-heading"><div><strong>最终提示词</strong><span>与生成请求完全一致</span></div><button id="copyJsonBtn" class="btn btn-ghost btn-sm" type="button">复制</button></div><textarea id="jsonPreviewText" class="json-preview-text" readonly></textarea></section><section class="inspector-view result-preview-view"><div class="inspector-view-heading"><div><strong>生成结果</strong><span>点击图片可查看原图</span></div></div><div id="resultPreview" class="result-preview"><div class="empty-state"><span class="empty-preview-mark">N</span><p>生成结果会显示在这里</p></div></div></section></div>
+                <section class="generation-panel"><div class="generation-heading"><strong>图片生成</strong><div id="imageProviderStatus" class="provider-status"><span id="activeImageProvider" class="provider-empty-message" role="status">正在加载图片渠道...</span><button id="imageProviderStatusButton" class="provider-status-button" type="button" aria-label="查看图片渠道配置状态" aria-describedby="imageProviderStatusPopover" aria-expanded="false" title="查看渠道配置状态" hidden>i</button><div id="imageProviderStatusPopover" class="provider-status-popover" role="tooltip"></div></div></div><div class="generation-fields"><div class="form-group"><label for="imageProviderSelect">渠道</label><select id="imageProviderSelect" class="select-input"></select></div><div class="form-group"><label for="imageModelSelect">模型</label><select id="imageModelSelect" class="select-input"></select></div></div><div id="imageProviderOptions" class="provider-option-grid"></div><div class="reference-upload"><input type="file" id="imageInput" accept="image/*" multiple hidden><button id="uploadImageBtn" class="reference-upload-btn" type="button"><span>＋</span><span>添加参考图片</span><small>支持多张角色或风格参考图</small></button><div id="imagePreview" class="image-preview"></div></div><button id="generateImageBtn" class="btn btn-primary generate-button" type="button">使用结构化提示词生成</button></section>
+            </aside>
         </main>
     </div>
+    <nav class="mobile-category-nav"><button class="tab-btn active" data-tab="basic" type="button">基础</button><button class="tab-btn" data-tab="scene" type="button">场景</button><button class="tab-btn" data-tab="subject" type="button">主体</button><button class="tab-btn" data-tab="camera" type="button">相机</button><button class="tab-btn" data-tab="aesthetic" type="button">质感</button></nav>
+</div>
 
-    <!-- AI 对话框 -->
-    <div id="aiModal" class="modal">
-        <div class="modal-content" style="max-width: 900px; width: 90%;">
-            <div class="modal-header">
-                <h3 id="aiModalTitle">AI 助手</h3>
-                <button class="modal-close">&times;</button>
-            </div>
-            <div class="modal-body" style="display: flex; gap: 20px; height: 60vh; overflow: hidden;">
-                <!-- Left Panel: Input & Images -->
-                <div style="flex: 1; display: flex; flex-direction: column; gap: 10px; overflow-y: auto;">
-                    <div class="form-group" style="flex: 0 0 auto;">
-                        <label id="aiModalLabel">描述你的需求</label>
-                        <textarea id="aiPromptInput" class="textarea-input" rows="5"
-                            placeholder="例如：一个在雨中哭泣的少女..."></textarea>
-                    </div>
+<div id="fieldOptionsModal" class="modal"><div class="modal-content field-options-modal-content"><div class="modal-header"><div><span class="modal-eyebrow">字段下拉选项</span><h3 id="fieldOptionsTitle">管理选项</h3></div><button class="modal-close" type="button">×</button></div><div class="modal-body"><p class="field-options-help">只有手动保存的内容会加入当前字段的下拉列表。</p><div id="fieldOptionsList" class="field-options-list"></div></div><div class="modal-footer"><button id="fieldOptionSaveCurrentBtn" class="btn btn-secondary" type="button">保存当前输入为选项</button><button id="fieldOptionsCloseBtn" class="btn btn-primary" type="button">完成</button></div></div></div>
 
-                    <!-- AI Local Image Upload -->
-                    <div class="form-group" style="flex: 1; display: flex; flex-direction: column; min-height: 150px;">
-                        <label>参考图片 (仅本次AI使用)</label>
-                        <div class="image-upload-area"
-                            style="flex: 1; border: 1px dashed var(--border-color); border-radius: 8px; padding: 10px; overflow-y: auto; min-height: 100px;">
-                            <input type="file" id="aiImageInput" accept="image/*" multiple style="display: none;">
-                            <button id="aiUploadImageBtn" class="btn btn-secondary btn-sm"
-                                style="width: 100%; margin-bottom: 10px;">📤 上传参考图</button>
-                            <div id="aiImagePreview" class="image-preview"
-                                style="display: flex; gap: 10px; flex-wrap: wrap;"></div>
-                        </div>
-                    </div>
-                </div>
+<div id="aiModal" class="modal"><div class="modal-content modal-content-wide"><div class="modal-header"><div><span class="modal-eyebrow">结构化提示词助手</span><h3 id="aiModalTitle">AI 助手</h3></div><button class="modal-close" type="button">×</button></div><div class="modal-body ai-modal-grid"><section><div class="form-group"><label id="aiModalLabel">描述你的需求</label><textarea id="aiPromptInput" class="textarea-input" rows="6"></textarea></div><div class="form-group ai-reference-group"><label>参考图片（仅本次 AI 使用）</label><div class="image-upload-area"><input type="file" id="aiImageInput" accept="image/*" multiple hidden><button id="aiUploadImageBtn" class="btn btn-secondary btn-sm" type="button">上传参考图</button><div id="aiImagePreview" class="image-preview"></div></div></div></section><section class="ai-response-panel"><label>结构化结果预览</label><textarea id="aiResponsePreview" class="textarea-input code-textarea" readonly></textarea><div id="aiDiffContainer" class="diff-container"></div></section></div><div class="modal-footer"><span id="aiStatusText" class="modal-status"></span><button id="aiModalCancelBtn" class="btn btn-secondary" type="button">关闭</button><button id="aiModalStopBtn" class="btn btn-danger" type="button" style="display: none;">停止</button><button id="aiModalExecuteBtn" class="btn btn-primary" type="button">生成提示词</button><button id="aiModalApplyBtn" class="btn btn-primary" type="button" style="display: none;">应用所选字段</button></div></div></div>
 
-                <!-- Right Panel: Response Preview -->
-                <div style="flex: 1; display: flex; flex-direction: column; overflow-y: hidden;">
-                    <label>AI 回复预览</label>
-                    <textarea id="aiResponsePreview" class="textarea-input"
-                        style="flex: 1; font-family: monospace; font-size: 12px; background: #fafafa; resize: none;"
-                        readonly></textarea>
-                    
-                    <!-- Diff View Container -->
-                    <div id="aiDiffContainer" class="diff-container">
-                        <!-- Diff items will be injected here -->
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <span id="aiStatusText" style="margin-right: auto; color: var(--text-tertiary); font-size: 12px;"></span>
-                <button id="aiModalCancelBtn" class="btn btn-secondary">关闭</button>
-                <button id="aiModalStopBtn" class="btn btn-danger" style="display: none;">⏹ 停止</button>
-                <button id="aiModalExecuteBtn" class="btn btn-primary">生成提示词</button>
-                <button id="aiModalApplyBtn" class="btn btn-primary" style="display: none;">应用结果</button>
-            </div>
-        </div>
-    </div>
+<div id="configModal" class="modal"><div class="modal-content config-modal-content"><div class="modal-header"><div><span class="modal-eyebrow">连接设置</span><h3>模型配置</h3></div><button class="modal-close" type="button">×</button></div><div class="modal-body config-modal-body"><section class="config-section"><h4>提示词生成模型</h4><div class="form-group"><label for="configBaseUrl">Base URL</label><input type="text" id="configBaseUrl" class="text-input"></div><div class="form-group"><label for="configApiKey">API Key</label><input type="password" id="configApiKey" class="text-input"></div><div class="form-group"><label for="configModel">Model</label><input type="text" id="configModel" class="text-input"></div></section><section class="config-section"><h4>图片生成模型</h4><div class="form-group"><label for="configImageProvider">配置渠道</label><select id="configImageProvider" class="select-input"><option value="gemini">Gemini</option><option value="openai_images">OpenAI Images</option><option value="qwen_image">千问图像</option></select></div><div class="form-group image-config-group" data-provider-config="gemini"><label>Gemini Base URL</label><input type="text" id="configGeminiBaseUrl" class="text-input"></div><div class="form-group image-config-group" data-provider-config="gemini"><label>Gemini API Key</label><input type="password" id="configGeminiApiKey" class="text-input"></div><div class="form-group image-config-group" data-provider-config="gemini"><label>Gemini Model</label><select id="configGeminiModel" class="select-input"><option value="gemini-3-pro-image-preview">gemini-3-pro-image-preview</option><option value="gemini-3.1-flash-image-preview">gemini-3.1-flash-image-preview</option></select></div><div class="form-group image-config-group" data-provider-config="openai_images"><label>OpenAI Images Base URL</label><input type="text" id="configOpenAIImageBaseUrl" class="text-input"></div><div class="form-group image-config-group" data-provider-config="openai_images"><label>OpenAI Images API Key</label><input type="password" id="configOpenAIImageApiKey" class="text-input"></div><div class="form-group image-config-group" data-provider-config="openai_images"><label>OpenAI Images Model</label><input type="text" id="configOpenAIImageModel" class="text-input"></div><div class="form-group image-config-group" data-provider-config="qwen_image"><label>千问图像 Base URL</label><input type="text" id="configQwenImageBaseUrl" class="text-input"></div><div class="form-group image-config-group" data-provider-config="qwen_image"><label>千问图像 API Key</label><input type="password" id="configQwenImageApiKey" class="text-input"></div><div class="form-group image-config-group" data-provider-config="qwen_image"><label>千问图像 Model</label><select id="configQwenImageModel" class="select-input"><option value="qwen-image-3.0-pro">qwen-image-3.0-pro</option></select></div></section></div><div class="modal-footer"><button id="saveConfigBtn" class="btn btn-primary" type="button">保存配置</button></div></div></div>
 
-    <!-- 配置对话框 -->
-    <div id="configModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>全局配置</h3>
-                <button class="modal-close">&times;</button>
-            </div>
-            <div class="modal-body">
-                <h4>提示词生成模型 (OpenAI Compatible)</h4>
-                <div class="form-group">
-                    <label>Base URL</label>
-                    <input type="text" id="configBaseUrl" class="text-input">
-                </div>
-                <div class="form-group">
-                    <label>API Key</label>
-                    <input type="password" id="configApiKey" class="text-input">
-                </div>
-                <div class="form-group">
-                    <label>Model</label>
-                    <input type="text" id="configModel" class="text-input">
-                </div>
-
-                <hr style="margin: 20px 0; border: 0; border-top: 1px solid var(--border-color);">
-
-                <h4>图片生成模型</h4>
-                <div class="form-group">
-                    <label>当前渠道</label>
-                    <select id="configImageProvider" class="select-input">
-                        <option value="gemini">Gemini</option>
-                        <option value="openai_images">OpenAI Images</option>
-                        <option value="qwen_image">千问图像</option>
-                    </select>
-                </div>
-                <div class="form-group image-config-group" data-provider-config="gemini">
-                    <label>Gemini Base URL</label>
-                    <input type="text" id="configGeminiBaseUrl" class="text-input"
-                        placeholder="https://generativelanguage.googleapis.com">
-                </div>
-                <div class="form-group image-config-group" data-provider-config="gemini">
-                    <label>Gemini API Key</label>
-                    <input type="password" id="configGeminiApiKey" class="text-input">
-                </div>
-                <div class="form-group image-config-group" data-provider-config="gemini">
-                    <label>Gemini Model</label>
-                    <select id="configGeminiModel" class="select-input">
-                        <option value="gemini-3-pro-image-preview">gemini-3-pro-image-preview</option>
-                        <option value="gemini-3.1-flash-image-preview">gemini-3.1-flash-image-preview</option>
-                    </select>
-                </div>
-                <div class="form-group image-config-group" data-provider-config="openai_images">
-                    <label>gpt-image-2 Base URL</label>
-                    <input type="text" id="configOpenAIImageBaseUrl" class="text-input"
-                        placeholder="https://api.openai.com/v1">
-                </div>
-                <div class="form-group image-config-group" data-provider-config="openai_images">
-                    <label>gpt-image-2 API Key</label>
-                    <input type="password" id="configOpenAIImageApiKey" class="text-input">
-                </div>
-                <div class="form-group image-config-group" data-provider-config="openai_images">
-                    <label>gpt-image-2 Model</label>
-                    <input type="text" id="configOpenAIImageModel" class="text-input" placeholder="gpt-image-2">
-                </div>
-                <div class="form-group image-config-group" data-provider-config="qwen_image">
-                    <label>千问图像 Base URL</label>
-                    <input type="text" id="configQwenImageBaseUrl" class="text-input"
-                        placeholder="https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1">
-                </div>
-                <div class="form-group image-config-group" data-provider-config="qwen_image">
-                    <label>千问图像 API Key</label>
-                    <input type="password" id="configQwenImageApiKey" class="text-input">
-                </div>
-                <div class="form-group image-config-group" data-provider-config="qwen_image">
-                    <label>千问图像 Model</label>
-                    <select id="configQwenImageModel" class="select-input">
-                        <option value="qwen-image-3.0-pro">qwen-image-3.0-pro</option>
-                    </select>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button id="saveConfigBtn" class="btn btn-primary">保存配置</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Image Preview Modal -->
-    <div id="imagePreviewModal" class="modal" style="z-index: 2000;">
-        <div class="modal-content" style="max-width: 95vw; max-height: 95vh; width: auto; background: transparent; box-shadow: none; padding: 0;">
-            <div style="position: relative; display: flex; flex-direction: column; align-items: center;">
-                 <img id="fullImagePreview" src="" style="max-width: 100%; max-height: 85vh; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); object-fit: contain;">
-                 <div style="margin-top: 15px; display: flex; gap: 10px; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 8px;">
-                     <button id="downloadFullImageBtn" class="btn btn-primary">⬇ 保存原图</button>
-                     <button onclick="document.getElementById('imagePreviewModal').classList.remove('active')" class="btn btn-secondary" style="background: rgba(255,255,255,0.15); color: white; border: none;">关闭</button>
-                 </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Toast 由 script.js 动态创建堆叠容器 -->
-    <script src="/static/script.js"></script>
+<div id="imagePreviewModal" class="modal image-lightbox"><div class="lightbox-content"><img id="fullImagePreview" src="" alt="生成图片原图"><div class="lightbox-actions"><button id="downloadFullImageBtn" class="btn btn-primary" type="button">保存原图</button><button onclick="document.getElementById('imagePreviewModal').classList.remove('active')" class="btn btn-secondary" type="button">关闭</button></div></div></div>
+<script src="/static/script.js"></script>
+<script src="/static/structured-ui.js"></script>
 </body>
-
 </html>
