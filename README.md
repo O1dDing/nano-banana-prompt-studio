@@ -62,7 +62,7 @@ pip install -r requirements.txt
 python start.py
 
 #或者docker运行
-docker run --rm --name nano-banana-web -p 5000:5000 lissettecarlr/nano-banana-web:v0.1.9
+docker run --rm --name nano-banana-web -p 5000:5000 lissettecarlr/nano-banana-web:v0.4.0
 ```
 
 ### 3.3 通过代码运行

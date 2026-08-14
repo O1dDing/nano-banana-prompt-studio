@@ -1198,6 +1198,8 @@ async function handleAiExecute() {
     // UI Update
     elements.aiResponsePreview.value = '';
     elements.aiStatusText.textContent = '正在思考...';
+    const thinkingStatusText = elements.aiStatusText.textContent;
+    let streamStatusText = '';
     elements.aiModalExecuteBtn.style.display = 'none';
     elements.aiModalStopBtn.style.display = 'inline-block';
     elements.aiModalApplyBtn.style.display = 'none';
@@ -1205,6 +1207,9 @@ async function handleAiExecute() {
     // 耗时反馈：生成期间实时显示已耗时
     const stopStatusTimer = startElapsedTimer(seconds => {
         elements.aiStatusText.textContent = `正在生成 · 已耗时 ${seconds}s`;
+        if (streamStatusText) {
+            elements.aiStatusText.textContent = streamStatusText;
+        }
     });
     let aiFinalStatus = '';
 
@@ -1232,24 +1237,33 @@ async function handleAiExecute() {
             signal: signal
         });
 
-        if (!response.ok) throw new Error('API request failed');
+        if (!response.ok) {
+            let message = `API request failed (${response.status})`;
+            try {
+                const payload = await response.json();
+                message = payload.error || message;
+            } catch (_error) {
+                // Keep the HTTP fallback when the response is not JSON.
+            }
+            throw new Error(message);
+        }
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let fullContent = '';
+        const sseParser = new SseStream.SseEventParser();
+        let receivedDone = false;
 
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            const chunk = decoder.decode(value);
-            const lines = chunk.split('\n');
+            const dataEvents = sseParser.push(decoder.decode(value));
+            for (const dataStr of dataEvents) {
 
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const dataStr = line.slice(6);
                     if (dataStr === '[DONE]') {
                         aiFinalStatus = '生成完成';
+                        receivedDone = true;
                         elements.aiModalStopBtn.style.display = 'none';
                         elements.aiModalApplyBtn.style.display = 'inline-block';
                         elements.aiModalExecuteBtn.style.display = 'inline-block';
@@ -1289,20 +1303,23 @@ async function handleAiExecute() {
                             }
                         }
                     } else {
-                        try {
-                            const parsed = JSON.parse(dataStr);
-                            if (parsed.content) {
-                                fullContent += parsed.content;
-                                elements.aiResponsePreview.value = fullContent;
-                                elements.aiResponsePreview.scrollTop = elements.aiResponsePreview.scrollHeight;
+                        const event = SseStream.parseSseJsonEvent(dataStr);
+                        if (event.type === 'status') {
+                            if (event.status === 'thinking') {
+                                streamStatusText = thinkingStatusText;
                             }
-                            if (parsed.error) throw new Error(parsed.error);
-                        } catch (e) {
-                            // ignore partial chunks
+                        } else if (event.type === 'content') {
+                            streamStatusText = '';
+                            fullContent += event.content;
+                            elements.aiResponsePreview.value = fullContent;
+                            elements.aiResponsePreview.scrollTop = elements.aiResponsePreview.scrollHeight;
                         }
                     }
-                }
             }
+        }
+        sseParser.finish();
+        if (!receivedDone) {
+            throw new Error('AI \u6d41\u5f0f\u54cd\u5e94\u610f\u5916\u4e2d\u65ad');
         }
 
     } catch (e) {

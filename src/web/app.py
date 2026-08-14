@@ -434,7 +434,9 @@ def generate_prompt():
         
         # 流式生成
         def generate():
+            thinking_reported = False
             try:
+                yield f"data: {json.dumps({'status': 'started'})}\n\n"
                 stream = client.chat.completions.create(
                     model=model,
                     messages=messages,
@@ -444,6 +446,11 @@ def generate_prompt():
                 for chunk in stream:
                     if chunk.choices and len(chunk.choices) > 0:
                         delta = chunk.choices[0].delta
+                        reasoning_content = getattr(delta, 'reasoning_content', None)
+                        if reasoning_content and not thinking_reported:
+                            thinking_reported = True
+                            yield f"data: {json.dumps({'status': 'thinking'})}\n\n"
+
                         if delta and delta.content:
                             # 发送SSE格式的数据
                             yield f"data: {json.dumps({'content': delta.content})}\n\n"
@@ -451,8 +458,13 @@ def generate_prompt():
                 yield "data: [DONE]\n\n"
             except Exception as e:
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            finally:
+                http_client.close()
         
-        return Response(generate(), mimetype='text/event-stream')
+        response = Response(generate(), mimetype='text/event-stream')
+        response.headers['Cache-Control'] = 'no-cache'
+        response.headers['X-Accel-Buffering'] = 'no'
+        return response
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -633,7 +645,9 @@ def modify_prompt():
         
         # 流式生成
         def generate():
+            thinking_reported = False
             try:
+                yield f"data: {json.dumps({'status': 'started'})}\n\n"
                 stream = client.chat.completions.create(
                     model=model,
                     messages=messages,
@@ -643,14 +657,24 @@ def modify_prompt():
                 for chunk in stream:
                     if chunk.choices and len(chunk.choices) > 0:
                         delta = chunk.choices[0].delta
+                        reasoning_content = getattr(delta, 'reasoning_content', None)
+                        if reasoning_content and not thinking_reported:
+                            thinking_reported = True
+                            yield f"data: {json.dumps({'status': 'thinking'})}\n\n"
+
                         if delta and delta.content:
                             yield f"data: {json.dumps({'content': delta.content})}\n\n"
                 
                 yield "data: [DONE]\n\n"
             except Exception as e:
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            finally:
+                http_client.close()
         
-        return Response(generate(), mimetype='text/event-stream')
+        response = Response(generate(), mimetype='text/event-stream')
+        response.headers['Cache-Control'] = 'no-cache'
+        response.headers['X-Accel-Buffering'] = 'no'
+        return response
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
