@@ -1,0 +1,178 @@
+             model,
++                dict(options),
++            )
++        except Exception:
++            with image_tasks_lock:
++                image_tasks.pop(task_id, None)
++            raise
++
++        response = jsonify({'task_id': task_id, 'status': 'queued'})
++        response.status_code = 202
++        response.headers['Cache-Control'] = 'no-store'
++        return response
++    except Exception as e:
++        print(f"Submit Generate Image Error: {e}")
++        return jsonify({'error': str(e)}), 500
++
++
++@app.route('/api/generate-image/status/<task_id>', methods=['GET'])
++def get_image_generation_status(task_id):
++    """查询图片生成任务状态。"""
++    _cleanup_image_tasks()
++
++    with image_tasks_lock:
++        task = image_tasks.get(task_id)
++        task_snapshot = dict(task) if task else None
++
++    if task_snapshot is None:
++        response = jsonify({'error': '任务不存在或已过期'})
++        response.status_code = 404
++        response.headers['Cache-Control'] = 'no-store'
++        return response
++
++    payload = {'task_id': task_id, 'status': task_snapshot['status']}
++    if task_snapshot['status'] == 'completed':
++        payload['image'] = task_snapshot.get('image')
++    elif task_snapshot['status'] == 'failed':
++        payload['error'] = task_snapshot.get('error', '生成失败')
++
++    response = jsonify(payload)
++    response.headers['Cache-Control'] = 'no-store'
++    return response
++
++
+ @app.route('/api/modify', methods=['POST'])
+ 
+ def modify_prompt():
+@@ -606,6 +722,7 @@
+         base_url = config.get('base_url', '').rstrip('/')
+         api_key = config.get('api_key', '')
+         model = config.get('model', 'gpt-4o-mini')
++        web_search_mode = config.get('chat_web_search_mode', 'auto')
+         
+         if not api_key:
+             return jsonify({'error': '请先配置API密钥'}), 400
+@@ -657,22 +774,19 @@
+             thinking_reported = False
+             try:
+                 yield f"data: {json.dumps({'status': 'started'})}\n\n"
+-                stream = client.chat.completions.create(
++                for event in stream_stage1(
++                    client=client,
++                    base_url=base_url,
++                    api_key=api_key,
+                     model=model,
+                     messages=messages,
+-                    stream=True,
+-                )
+-                
+-                for chunk in stream:
+-                    if chunk.choices and len(chunk.choices) > 0:
+-                        delta = chunk.choices[0].delta
+-                        reasoning_content = getattr(delta, 'reasoning_content', None)
+-                        if reasoning_content and not thinking_reported:
+-                            thinking_reported = True
+-                            yield f"data: {json.dumps({'status': 'thinking'})}\n\n"
+-
+-                        if delta and delta.content:
+-                            yield f"data: {json.dumps({'content': delta.content})}\n\n"
++                    web_search_mode=web_search_mode,
++                ):
++                    if event.get('type') == 'thinking' and not thinking_reported:
++                        thinking_reported = True
++                        yield f"data: {json.dumps({'status': 'thinking'})}\n\n"
++                    if event.get('type') == 'content' and event.get('content'):
++                        yield f"data: {json.dumps({'content': event['content']})}\n\n"
+                 
+                 yield "data: [DONE]\n\n"
+             except Exception as e:
+@@ -701,4 +815,4 @@
+     print("按 Ctrl+C 停止服务器")
+     print("=" * 60)
+     
+-    app.run(host='0.0.0.0', port=5000, debug=True)
++    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+--- a/src/web/static/script.js
++++ b/src/web/static/script.js
+@@ -592,6 +592,28 @@
+ // ========================================
+ // Config Management
+ // ========================================
++
++function ensureChatWebSearchControl() {
++    let select = document.getElementById('configChatWebSearchMode');
++    if (select) return select;
++
++    const modelInput = elements.configModel;
++    const modelGroup = modelInput && modelInput.closest('.form-group');
++    if (!modelGroup) return null;
++
++    const group = document.createElement('div');
++    group.className = 'form-group';
++    group.innerHTML = `
++        <label for="configChatWebSearchMode">第一阶段联网</label>
++        <select id="configChatWebSearchMode" class="select-input">
++            <option value="disabled">禁止联网</option>
++            <option value="auto">自动联网</option>
++            <option value="force">强制联网</option>
++        </select>`;
++    modelGroup.insertAdjacentElement('afterend', group);
++    return group.querySelector('select');
++}
++
+ async function loadImageProviders() {
+     try {
+         const response = await fetch('/api/image-providers');
+@@ -623,6 +645,8 @@
+     elements.configBaseUrl.value = state.config.base_url || '';
+     elements.configApiKey.value = ''; // Don't show API key
+     elements.configModel.value = state.config.model || '';
++    const searchModeSelect = ensureChatWebSearchControl();
++    if (searchModeSelect) searchModeSelect.value = state.config.chat_web_search_mode || 'auto';
+ 
+     const configuredProvider = state.config.image_provider || 'gemini';
+     elements.configImageProvider.value = state.imageProviders[configuredProvider]
+@@ -651,6 +675,7 @@
+     const payload = {
+         base_url: elements.configBaseUrl.value,
+         model: elements.configModel.value,
++        chat_web_search_mode: (document.getElementById('configChatWebSearchMode') || {}).value || 'auto',
+         image_provider: elements.configImageProvider.value,
+         gemini_base_url: elements.configGeminiBaseUrl.value,
+         gemini_model: elements.configGeminiModel.value,
+@@ -1427,6 +1452,64 @@
+ // ========================================
+ // Image Generation
+ // ========================================
++const IMAGE_TASK_POLL_INTERVAL_MS = 2500;
++const IMAGE_TASK_CLIENT_TIMEOUT_MS = 30 * 60 * 1000;
++
++function sleep(ms) {
++    return new Promise(resolve => setTimeout(resolve, ms));
++}
++
++async function readJsonResponse(response) {
++    const text = await response.text();
++    if (!text) return {};
++
++    try {
++        return JSON.parse(text);
++    } catch (e) {
++        const preview = text.replace(/\s+/g, ' ').slice(0, 220);
++        throw new Error(
++            `服务器返回了非 JSON 内容 (HTTP ${response.status})。` +
++            `可能是 Cloudflare Access 登录过期或网关错误。响应: ${preview}`
++        );
++    }
++}
++
++async function waitForImageTask(taskId) {
++    const startedAt = Date.now();
++
++    while (true) {
++        if (Date.now() - startedAt > IMAGE_TASK_CLIENT_TIMEOUT_MS) {
++            throw new Error('图片生成等待超过 30 分钟，已停止前端轮询');
++        }
++
++        const response = await fetch(
++            `/api/generate-image/status
