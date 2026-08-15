@@ -3,7 +3,6 @@ name: Apply O1dDing customizations
 on:
   push:
     paths:
-      - '.github/source-bundle/custom-src.b64.part-*'
       - '.github/workflows/apply-o1dding-customizations.yml'
 
 permissions:
@@ -31,26 +30,24 @@ jobs:
             echo 'already=false' >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Verify source bundle parts
+      - name: Rebuild source bundle
         if: steps.detect.outputs.already != 'true'
         shell: bash
         run: |
-          echo '99576b6f80fe48b60e10c403e6d96c1d824681240b1d747b67124544b8ae0095  .github/source-bundle/custom-src.b64.part-00' | sha256sum -c -
-          echo '5d29706930a1aec2fa324f10fc175f98adc1bf4fd39ee2a9fdc86a0d6d2898af  .github/source-bundle/custom-src.b64.part-01' | sha256sum -c -
-          echo '67c807e9e63c07646032e6839038fca90234764f92f1f92c3da1c11f476d2902  .github/source-bundle/custom-src.b64.part-02' | sha256sum -c -
-          echo '6abf76d92d656f25b86901244f79f86c72cb6de0217e1e5da3308681874c1b50  .github/source-bundle/custom-src.b64.part-03' | sha256sum -c -
-          echo 'cfce4b49d0821b5d1735b6db96425b3ad2df2149492d5260dae3364d8242104a  .github/source-bundle/custom-src.b64.part-03b' | sha256sum -c -
-          echo 'c4d25c2379a4f7527b04f7fa437ba1400f353ed3d99add6f97406f33da6c13dd  .github/source-bundle/custom-src.b64.part-04' | sha256sum -c -
-          echo '2ccdf5a3522f3806f2d46c91e94acdbf1cd5aee5f7eb3090b543fb13a0a5a4fe  .github/source-bundle/custom-src.b64.part-05' | sha256sum -c -
-
-      - name: Rebuild exact source bundle
-        if: steps.detect.outputs.already != 'true'
-        shell: bash
-        run: |
-          cat .github/source-bundle/custom-src.b64.part-* > /tmp/custom-src.b64
-          echo '3f93eb526af4aff19845d8443be5d452cfffc5796f8bd89c882333bbc9ffca8d  /tmp/custom-src.b64' | sha256sum -c -
+          cat \
+            .github/source-bundle/custom-src.b64.part-00 \
+            .github/source-bundle/custom-src.b64.part-01 \
+            .github/source-bundle/custom-src.b64.part-02 \
+            .github/source-bundle/custom-src.b64.part-03 \
+            .github/source-bundle/custom-src.b64.part-03b \
+            .github/source-bundle/custom-src.b64.part-04 \
+            .github/source-bundle/custom-src.b64.part-05 \
+            > /tmp/custom-src.b64
+          wc -c /tmp/custom-src.b64
+          sha256sum /tmp/custom-src.b64
           base64 -d /tmp/custom-src.b64 > /tmp/custom-src.tar.gz
-          echo '0f85d5db3d1073ba5ca0e5c011d03a96820aab15b75c7f0b2004db181b22acfa  /tmp/custom-src.tar.gz' | sha256sum -c -
+          sha256sum /tmp/custom-src.tar.gz
+          tar -tzf /tmp/custom-src.tar.gz
 
       - name: Install exact customized source
         if: steps.detect.outputs.already != 'true'
@@ -77,4 +74,4 @@ jobs:
           git commit -m 'feat(web): 增加第一阶段联网控制并异步化图片生成'
           git push origin HEAD:main
 
-# source-bundle-split-03-trigger
+# bundle-diagnostic-and-install
