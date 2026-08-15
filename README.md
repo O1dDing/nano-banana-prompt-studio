@@ -47,7 +47,7 @@
 | Gemini 官方接口 | `google_search` |
 | Anthropic Claude 官方接口 | Anthropic Web Search Tool |
 | 阿里云百炼 / Qwen | `enable_search` / `forced_search` |
-| 其他 OpenAI-compatible 中转 | 尝试兼容联网；`auto` 失败回退，`force` 失败报错 |
+| 其他中转站 | 尝试兼容联网；`auto` 失败回退，`force` 失败报错 |
 
 > 第二阶段图片生成逻辑不使用这一开关；图片模型只接收最终结构化 Prompt 和可选参考图。
 
@@ -99,34 +99,11 @@ IMAGE_TASK_TTL_SECONDS=1800
   - 千问图像
   - 豆包 Seedream
 
-## 界面预览
-
-### 主界面
-
-![UI Preview](./images/UI_1.png)
-
-### AI 生成提示词
-
-![UI Preview](./images/UI_2.png)
-
-### AI 修改提示词
-
-![UI Preview](./images/UI_3.png)
-
-### Web 界面
-
-![UI web](./images/web1.png)
-
-## 与上游同步
+## 同步
 
 本仓库以原项目为基础维护增强功能。上游项目：
 
 - [lissettecarlr/nano-banana-prompt-studio](https://github.com/lissettecarlr/nano-banana-prompt-studio)
-
-如上游新增图片渠道、模型参数或 UI 更新，应优先同步上游后，再检查本 Fork 的两处核心增强是否仍能正常合并：
-
-1. `src/utils/stage1_web_search.py` 与第一阶段联网调用
-2. `src/web/app.py` / `src/web/static/script.js` 的异步生图任务与轮询
 
 ## License
 
