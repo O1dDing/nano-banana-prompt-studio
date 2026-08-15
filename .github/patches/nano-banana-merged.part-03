@@ -1,0 +1,192 @@
+/${encodeURIComponent(taskId)}`,
++            {
++                method: 'GET',
++                headers: { 'Accept': 'application/json' },
++                cache: 'no-store'
++            }
++        );
++        const data = await readJsonResponse(response);
++
++        if (!response.ok) {
++            throw new Error(data.error || `查询生成任务失败 (HTTP ${response.status})`);
++        }
++
++        if (data.status === 'completed') {
++            return data;
++        }
++        if (data.status === 'failed') {
++            throw new Error(data.error || '生成图片失败');
++        }
++        if (data.status !== 'queued' && data.status !== 'processing') {
++            throw new Error(`未知任务状态: ${data.status || 'empty'}`);
++        }
++
++        await sleep(IMAGE_TASK_POLL_INTERVAL_MS);
++    }
++}
++
+ async function generateImage() {
+     // 移动端点击生成后自动关闭侧边栏
+     const sidebar = document.getElementById('sidebar');
+@@ -1472,9 +1555,13 @@
+     });
+ 
+     try {
+-        const response = await fetch('/api/generate-image', {
++        // 第一个请求只负责创建后台任务，会很快返回 202 + task_id。
++        const submitResponse = await fetch('/api/generate-image', {
+             method: 'POST',
+-            headers: { 'Content-Type': 'application/json' },
++            headers: {
++                'Content-Type': 'application/json',
++                'Accept': 'application/json'
++            },
+             body: JSON.stringify({
+                 prompt: prompt,
+                 images: state.uploadedImages,
+@@ -1484,9 +1571,18 @@
+             })
+         });
+ 
+-        const data = await response.json();
++        const submitData = await readJsonResponse(submitResponse);
++        if (!submitResponse.ok) {
++            throw new Error(submitData.error || `提交生成任务失败 (HTTP ${submitResponse.status})`);
++        }
++        if (!submitData.task_id) {
++            throw new Error('服务器没有返回 task_id');
++        }
++
++        // 后续每 2.5 秒查询一次状态。每个 HTTP 请求都很短，不再等待数分钟。
++        const data = await waitForImageTask(submitData.task_id);
+ 
+-        if (response.ok && data.image) {
++        if (data.image) {
+             state.currentGeneratedImage = data.image;
+ 
+             // 用 DOM 构建结果，避免把几 MB 的 dataURL 写进 HTML 属性
+@@ -1508,7 +1604,7 @@
+             elements.resultPreview.replaceChildren(container);
+             showToast('图片生成成功!', 'success');
+         } else {
+-            throw new Error(data.error || '生成失败');
++            throw new Error('任务已完成，但没有返回图片数据');
+         }
+ 
+     } catch (e) {
+--- a/src/utils/ai_config.py
++++ b/src/utils/ai_config.py
+@@ -15,6 +15,7 @@
+         "base_url": "https://api.openai.com/v1",
+         "api_key": "",
+         "model": "gpt-5.1",
++        "chat_web_search_mode": "auto",
+         "image_provider": "gemini",
+         "gemini_base_url": "",
+         "gemini_api_key": "",
+--- /dev/null
++++ b/src/utils/stage1_web_search.py
+@@ -0,0 +1,332 @@
++# stage1-web-switch-v2
++"""Stage-1 web-search compatibility adapter for Nano Banana Studio Web."""
++from __future__ import annotations
++
++import base64
++import json
++from typing import Any, Iterable
++from urllib.parse import urlparse
++
++VALID_MODES = {"disabled", "auto", "force"}
++
++
++def normalize_mode(value: Any) -> str:
++    value = str(value or "auto").strip().lower()
++    aliases = {
++        "off": "disabled", "disable": "disabled", "disabled": "disabled", "禁止联网": "disabled",
++        "auto": "auto", "自动联网": "auto",
++        "on": "force", "forced": "force", "force": "force", "强制联网": "force",
++    }
++    value = aliases.get(value, value)
++    return value if value in VALID_MODES else "auto"
++
++
++def _provider(base_url: str) -> str:
++    host = (urlparse(base_url or "").hostname or "").lower()
++    if host == "generativelanguage.googleapis.com" or host.endswith(".googleapis.com") and "generativelanguage" in host:
++        return "gemini"
++    if host == "api.anthropic.com" or host.endswith(".anthropic.com"):
++        return "anthropic"
++    if host.endswith("dashscope.aliyuncs.com") or host.endswith("maas.aliyuncs.com"):
++        return "dashscope"
++    if host == "api.openai.com" or host.endswith(".openai.com"):
++        return "responses"
++    if host == "api.x.ai" or host.endswith(".x.ai"):
++        return "responses"
++    if "volces.com" in host or "volcengine.com" in host:
++        return "responses"
++    return "generic"
++
++
++def _chat_stream(client: Any, model: str, messages: list[dict[str, Any]], extra_body: dict[str, Any] | None = None) -> Iterable[dict[str, str]]:
++    kwargs: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
++    if extra_body:
++        kwargs["extra_body"] = extra_body
++    stream = client.chat.completions.create(**kwargs)
++    thinking_sent = False
++    for chunk in stream:
++        choices = getattr(chunk, "choices", None) or []
++        if not choices:
++            continue
++        delta = getattr(choices[0], "delta", None)
++        if not delta:
++            continue
++        reasoning = getattr(delta, "reasoning_content", None)
++        if reasoning and not thinking_sent:
++            thinking_sent = True
++            yield {"type": "thinking"}
++        content = getattr(delta, "content", None)
++        if content:
++            yield {"type": "content", "content": content}
++
++
++def _extract_system_and_user(messages: list[dict[str, Any]]) -> tuple[str, Any]:
++    systems: list[str] = []
++    users: list[Any] = []
++    for msg in messages:
++        role = msg.get("role")
++        content = msg.get("content", "")
++        if role in {"system", "developer"}:
++            if isinstance(content, str):
++                systems.append(content)
++            else:
++                systems.append(json.dumps(content, ensure_ascii=False))
++        elif role == "user":
++            users.append(content)
++    if len(users) == 1:
++        user = users[0]
++    else:
++        user = users
++    return "\n".join(systems), user
++
++
++def _data_uri(value: str) -> tuple[str, str] | None:
++    if not isinstance(value, str) or not value.startswith("data:") or ";base64," not in value:
++        return None
++    header, data = value.split(";base64,", 1)
++    mime = header[5:] or "image/png"
++    return mime, data
++
++
++def _responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
++    result: list[dict[str, Any]] = []
++    for msg in messages:
++        role = msg.get("role", "user")
++        content = msg.get("content", "")
++        if isinstance(content, str):
++            parts = [{"type": "input_text", "text": content}]
++        else:
++            parts = []
++            for item in content or []:
++                kind = item.get("type")
++                if kind == "text":
++                    parts.append({"type": "input_text"
