@@ -59,3 +59,5 @@ jobs:
           git add src/web/app.py src/web/static/script.js src/utils/ai_config.py src/utils/stage1_web_search.py
           git commit -m 'feat(web): 增加第一阶段联网控制并异步化图片生成'
           git push origin HEAD:main
+
+# bootstrap-trigger
