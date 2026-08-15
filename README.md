@@ -2,156 +2,195 @@
   <img src="./images/logo.png" alt="Nano Banana Logo" width="120" />
 </p>
 
-<h1 align="center">Nano Banana Studio</h1>
+<h1 align="center">Nano Banana Studio · O1dDing Fork</h1>
 
 <p align="center">
-  <strong>一站式 AI 生图工作台，通过结构化提示词控制多渠道图片生成质量。</strong>
+  <strong>结构化提示词 + 多渠道生图，并增强第一阶段联网检索与 Cloudflare 部署稳定性。</strong>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white" alt="Python" />
-  <img src="https://img.shields.io/badge/PyQt6-6.6+-green?logo=qt&logoColor=white" alt="PyQt6" />
-  <img src="https://img.shields.io/badge/Google%20Gemini-4285F4?logo=googlegemini&logoColor=white" alt="Google Gemini" />
-  <img src="https://img.shields.io/badge/OpenAI%20Images-412991?logo=openai&logoColor=white" alt="OpenAI Images" />
-  <img src="https://img.shields.io/badge/Platform-Windows%20%20%7C%20Linux-lightgrey" alt="Platform" />
+  <img src="https://img.shields.io/badge/OpenAI%20Images-gpt--image--2-412991?logo=openai&logoColor=white" alt="OpenAI Images" />
+  <img src="https://img.shields.io/badge/Gemini-Image-4285F4?logo=googlegemini&logoColor=white" alt="Gemini" />
+  <img src="https://img.shields.io/badge/Docker-Web-2496ED?logo=docker&logoColor=white" alt="Docker" />
   <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License" />
 </p>
 
----
+> 本仓库是 [lissettecarlr/nano-banana-prompt-studio](https://github.com/lissettecarlr/nano-banana-prompt-studio) 的 Fork。保留原项目的 MIT License、原有桌面端/Web 端功能与图片生成渠道，并针对 Web 自托管场景加入下述增强。
 
-## 1 功能特性
+## 本 Fork 的主要改动
 
-- **可视化编辑** - 表单化编辑提示词，方便针对特定元素进行修改。
-- **AI 智能生成** - 一句话描述生成完整结构化提示词
-- **AI 修改** - 一句话描述对已有提示词进行修改
-- **预设管理** - 保存/加载/删除常用提示词配置
-- **一键复制** - 快速复制 JSON 到剪贴板
-- **图片生成** - 支持 Gemini、OpenAI Images（gpt-image-2）、千问和豆包 Seedream 的多渠道生成图片，各渠道独立参数配置。
+### 1. 第一阶段：提示词生成 / 修改增加联网三档开关
 
-## 2 界面预览
+在“提示词生成模型”配置中增加：
 
-* 主界面
-![UI Preview](./images/UI_1.png)
-----
+- **禁止联网（disabled）**：完全按原项目方式调用，不主动使用搜索工具。
+- **自动联网（auto）**：向支持联网的模型开放搜索工具，由模型自行判断是否需要检索；若第三方兼容网关不支持搜索，则自动回退普通调用，保证兼容性。
+- **强制联网（force）**：要求本次第一阶段必须执行联网搜索；若当前模型或网关不支持，则明确返回错误，不静默降级。
 
-* AI生成提示词界面
-![UI Preview](./images/UI_2.png)
-----
+第一阶段指：
 
-* AI修改提示词界面
-![UI Preview](./images/UI_3.png)
-----
+```text
+用户自然语言 / 参考图
+        ↓
+提示词生成或修改模型
+        ↓
+结构化 JSON Prompt
+```
 
-* web界面
-![UI web](./images/web1.png)
-----
+联网适配按不同 API 能力分别处理，而不是简单给所有模型强塞同一个参数：
 
+| API / Provider | 联网方式 |
+|---|---|
+| OpenAI / 支持 Responses API 的兼容服务 | `Responses API + web_search` |
+| xAI / Grok 等兼容 Responses API 的服务 | `web_search` |
+| Gemini 官方接口 | `google_search` |
+| Anthropic Claude 官方接口 | Anthropic Web Search Tool |
+| 阿里云百炼 / Qwen | `enable_search` / `forced_search` |
+| 其他 OpenAI-compatible 中转 | 尝试兼容联网；`auto` 失败回退，`force` 失败报错 |
 
-## 3 快速开始
+> 第二阶段图片生成逻辑不使用这一开关；图片模型只接收最终结构化 Prompt 和可选参考图。
 
-### 3.1 下载客户端使用
+### 2. 第二阶段：图片生成异步化，规避 Cloudflare 524
 
-在[Releases](https://github.com/lissettecarlr/nano-banana-prompt-studio/releases)页面下载最新客户端，目前只编译了`windows`版本，解压后双击运行。
+原 Web 版在 `/api/generate-image` 内同步等待图片模型完成。高分辨率或繁忙时生成时间可能超过 Cloudflare 的代理等待窗口，表现为 **524 Timeout**。
 
+本 Fork 改为：
 
-### 3.2 web运行
+```text
+浏览器提交图片生成
+        ↓
+服务器立即返回 task_id（HTTP 202）
+        ↓
+ThreadPoolExecutor 后台执行图片生成
+        ↓
+浏览器轮询 /api/generate-image/status/<task_id>
+        ↓
+完成后返回图片
+```
+
+同时增加：
+
+- 后台任务状态：`queued / processing / completed / failed`
+- 任务 TTL 清理，避免 Base64 图片长期占用内存
+- 可通过环境变量调整并发与任务保留时间
+- 前端对 HTML/代理错误响应给出可读错误，不再只出现 `Unexpected token '<'`
+
+默认环境变量：
+
+```text
+IMAGE_TASK_MAX_WORKERS=2
+IMAGE_TASK_TTL_SECONDS=1800
+```
+
+> 当前任务表保存在 Python 进程内存中，因此 Web 生产运行时应保持**单 Python 进程**；线程并发由 `IMAGE_TASK_MAX_WORKERS` 控制。
+
+## 原项目主要功能
+
+- 可视化编辑结构化提示词
+- AI 一句话生成完整结构化提示词
+- AI 修改现有结构化提示词
+- 参考图片输入
+- 预设保存 / 加载 / 删除
+- JSON 一键复制
+- 多渠道图片生成：
+  - Gemini
+  - OpenAI Images（`gpt-image-2`）
+  - 千问图像
+  - 豆包 Seedream
+
+## Web / Docker 部署
+
+### Debian 12 推荐方式
+
+```bash
+git clone https://github.com/O1dDing/nano-banana-prompt-studio.git
+cd nano-banana-prompt-studio
+
+docker build --pull -f web_dockerfile -t nano-banana-web:custom .
+
+docker run -d \
+  --name nano-banana-web \
+  --restart unless-stopped \
+  -p 5000:5000 \
+  -e IMAGE_TASK_MAX_WORKERS=2 \
+  -e IMAGE_TASK_TTL_SECONDS=1800 \
+  nano-banana-web:custom
+```
+
+浏览器访问：
+
+```text
+http://服务器IP:5000
+```
+
+如通过 Nginx / Cloudflare Tunnel / Cloudflare Proxy 对外提供服务，图片生成已采用后台任务 + 轮询方式，避免单个长 HTTP 请求等待整个生图过程。
+
+### Python 直接运行 Web
 
 ```bash
 cd src/web
 pip install -r requirements.txt
 python start.py
-
-#或者docker运行
-docker run --rm --name nano-banana-web -p 5000:5000 lissettecarlr/nano-banana-web:v0.4.0
 ```
 
-### 3.3 通过代码运行
+## 模型配置
 
-#### 环境要求
+### 提示词生成模型
 
-- Python 3.10+
+填写一个 OpenAI-compatible 的 Base URL、API Key 与模型名。联网模式位于同一区域。
 
-#### 安装
+例如 OpenAI：
 
-```bash
-# 克隆仓库
-git clone https://github.com/your-username/nano-banana-prompt-studio.git
-cd nano-banana-prompt-studio
-
-# 安装依赖
-pip install -r requirements.txt
+```text
+Base URL: https://api.openai.com/v1
+Model:    你要使用的文本模型
+联网:     auto
 ```
 
-#### 运行
+第三方中转能否实际联网，取决于该中转是否实现对应搜索能力；因此：
 
-```bash
-cd src
-python main.py
+- 日常推荐 `auto`
+- 明确要求现实世界最新资料时可使用 `force`
+- 纯创意图片或不希望产生搜索调用时使用 `disabled`
+
+### OpenAI Images
+
+```text
+渠道:     OpenAI Images
+Base URL: https://api.openai.com/v1
+Model:    gpt-image-2
 ```
 
-#### 打包
-```bash
-python build.py
-```
+## 界面预览
 
-## 4 使用说明
+### 主界面
 
-### 4.1 基础使用
+![UI Preview](./images/UI_1.png)
 
-1. 启动应用后，点击设置按钮，填入模型
-2. 选择一个预设提示词
-3. 指定图片的尺寸大小等，点击图片生成
-4. 等待图片生成，尺寸越大越耗时
+### AI 生成提示词
 
-### 4.2 AI提示词生成
+![UI Preview](./images/UI_2.png)
 
-如果在设置中配置了`提示词生成模型`，那么可以通过描述，让AI来生成提示词。点击`AI生成提示词`进入子页面，可以输入描述和传入图片，来生成。点击「应用到表单」将生成的内容填充到编辑器。
+### AI 修改提示词
 
-### 4.3 AI提示词修改
+![UI Preview](./images/UI_3.png)
 
-如果在设置中配置了`提示词生成模型`，那么可以通过描述，让AI来对当前的提示词进行修改，点击`AI修改提示词`进入子页面，可以输入描述和传入图片，来修改，界面会展示出具体修改了哪些项，点击「应用到表单」将生成的内容填充到编辑器。
+### Web 界面
 
-## 5 效果
+![UI web](./images/web1.png)
 
-**使用提示词的时候附带了角色图，更多生成图见[pixiv](https://www.pixiv.net/users/18200513)**
+## 与上游同步
 
-----
+本仓库以原项目为基础维护增强功能。上游项目：
 
-* 海边中秋星野（gemini-3.1-flash-image）
-![](./images/海边中秋星野.png)
+- [lissettecarlr/nano-banana-prompt-studio](https://github.com/lissettecarlr/nano-banana-prompt-studio)
 
-* 海边中秋星野（gpt-image-2）
-![](./images/海边中秋星野gpt.png)
+如上游新增图片渠道、模型参数或 UI 更新，应优先同步上游后，再检查本 Fork 的两处核心增强是否仍能正常合并：
 
-----
+1. `src/utils/stage1_web_search.py` 与第一阶段联网调用
+2. `src/web/app.py` / `src/web/static/script.js` 的异步生图任务与轮询
 
-* 庭院睡觉中秋星野（gemini-3.1-flash-image）
-![](./images//庭院睡觉星野.png)
+## License
 
-* 庭院睡觉中秋星野（gpt-image-2）
-![](./images//庭院睡觉中秋星野gpt.png)
-
-----
-
-* 雪景下的中秋星野（gemini-3.1-flash-image）
-![](./images/雪景下的中秋星野.png)
-
-* 雪景下的中秋星野（gpt-image-2）
-![](./images/雪景下的中秋星野gpt.png)
-![](./images/雪景下的中秋星野gpt2.png)
-
-----
-
-* 阿拜多斯沙漠的中秋星野（gemini-3.1-flash-image）
-![](./images/阿拜多斯沙漠的中秋星野.png)
-
-----
-
-
-
-
-
-
-
-
-
+沿用上游项目的 **MIT License**。原项目及原作者版权声明保持不变。
