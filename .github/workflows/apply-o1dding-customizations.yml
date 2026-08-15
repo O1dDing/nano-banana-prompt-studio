@@ -1,0 +1,61 @@
+name: Apply O1dDing customizations
+
+on:
+  push:
+    paths:
+      - '.github/patches/nano-banana-merged.part-*'
+      - '.github/workflows/apply-o1dding-customizations.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-custom-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect existing customization
+        id: detect
+        shell: bash
+        run: |
+          if grep -q 'chat_web_search_mode' src/utils/ai_config.py \
+             && grep -q 'waitForImageTask' src/web/static/script.js \
+             && grep -q 'generate-image/status' src/web/app.py; then
+            echo 'already=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'already=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rebuild and verify patch
+        if: steps.detect.outputs.already != 'true'
+        shell: bash
+        run: |
+          cat .github/patches/nano-banana-merged.part-* > /tmp/nano-banana-merged.patch
+          echo 'b003a68ddee2a5bf29a7fdd2dcb761c930c0d97d3330ad67501ab804edc3f2bf  /tmp/nano-banana-merged.patch' | sha256sum -c -
+          git apply --check /tmp/nano-banana-merged.patch
+
+      - name: Apply custom patch
+        if: steps.detect.outputs.already != 'true'
+        shell: bash
+        run: git apply --whitespace=nowarn /tmp/nano-banana-merged.patch
+
+      - name: Validate Python and JavaScript
+        if: steps.detect.outputs.already != 'true'
+        shell: bash
+        run: |
+          python3 -m py_compile src/web/app.py src/utils/ai_config.py src/utils/stage1_web_search.py
+          node --check src/web/static/script.js
+
+      - name: Commit customized source
+        if: steps.detect.outputs.already != 'true'
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/web/app.py src/web/static/script.js src/utils/ai_config.py src/utils/stage1_web_search.py
+          git commit -m 'feat(web): 增加第一阶段联网控制并异步化图片生成'
+          git push origin HEAD:main
