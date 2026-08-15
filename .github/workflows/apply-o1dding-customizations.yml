@@ -77,4 +77,4 @@ jobs:
           git commit -m 'feat(web): 增加第一阶段联网控制并异步化图片生成'
           git push origin HEAD:main
 
-# source-bundle-split-03
+# source-bundle-split-03-trigger
