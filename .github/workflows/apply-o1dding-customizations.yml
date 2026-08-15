@@ -30,6 +30,18 @@ jobs:
             echo 'already=false' >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Normalize target line endings
+        if: steps.detect.outputs.already != 'true'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for name in ('src/web/app.py', 'src/web/static/script.js', 'src/utils/ai_config.py'):
+              p = Path(name)
+              data = p.read_bytes().replace(b'\r\n', b'\n')
+              p.write_bytes(data)
+          PY
+
       - name: Rebuild and verify patch
         if: steps.detect.outputs.already != 'true'
         shell: bash
@@ -60,4 +72,4 @@ jobs:
           git commit -m 'feat(web): 增加第一阶段联网控制并异步化图片生成'
           git push origin HEAD:main
 
-# bootstrap-trigger-v2
+# bootstrap-trigger-v3
