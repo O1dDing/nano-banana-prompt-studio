@@ -1,0 +1,169 @@
+ # 解析Data URI: data:image/png;base64,xxxx
+-                        header, encoded = img_str.split(';base64,')
+-                        mime_type = header.split(':')[1]
+-                        
+-                        # 确定扩展名
+-                        ext_map = {
+-                            'image/jpeg': '.jpg',
+-                            'image/png': '.png',
+-                            'image/webp': '.webp',
+-                            'image/gif': '.gif',
+-                            'image/bmp': '.bmp'
+-                        }
+-                        ext = ext_map.get(mime_type, '.jpg')
+-                        
+-                        # 解码并保存到临时文件
+-                        img_data = base64.b64decode(encoded)
+-                        fd, path = tempfile.mkstemp(suffix=ext)
+-                        with os.fdopen(fd, 'wb') as f:
+-                            f.write(img_data)
+-                        
+-                        temp_files.append(path)
+-                        processed_images.append(path)
+-                    except Exception as e:
+-                        print(f"Error processing image: {e}")
+-                        # 如果解析失败，尝试原样传递（虽然可能也会失败）
+-                        processed_images.append(img_str)
+-                else:
++        for img_str in images or []:
++            if isinstance(img_str, str) and img_str.startswith('data:'):
++                try:
++                    # Data URI: data:image/png;base64,xxxx
++                    header, encoded = img_str.split(';base64,', 1)
++                    mime_type = header.split(':', 1)[1]
++                    ext_map = {
++                        'image/jpeg': '.jpg',
++                        'image/png': '.png',
++                        'image/webp': '.webp',
++                        'image/gif': '.gif',
++                        'image/bmp': '.bmp',
++                    }
++                    ext = ext_map.get(mime_type, '.jpg')
++                    img_data = base64.b64decode(encoded)
++                    fd, path = tempfile.mkstemp(suffix=ext)
++                    with os.fdopen(fd, 'wb') as f:
++                        f.write(img_data)
++                    temp_files.append(path)
++                    processed_images.append(path)
++                except Exception as e:
++                    print(f"Error processing image for task {task_id}: {e}")
+                     processed_images.append(img_str)
++            else:
++                processed_images.append(img_str)
+ 
+-        # 使用请求开始时的渠道和模型快照，避免全局配置变化影响本次生成。
+         client = create_image_provider_from_credentials(
+             provider,
+             credentials['base_url'],
+@@ -553,30 +566,35 @@
+             model,
+         )
+         client.set_generation_options(options)
+-        config_manager.set_active_image_selection(provider, model)
+-        config_manager.save_image_generation_options(provider, model, options)
+ 
+-        # 生成图片
+         generated_image = client.generate_image(
+             text=prompt,
+-            images=processed_images if processed_images else None
++            images=processed_images if processed_images else None,
+         )
+ 
+-        if generated_image:
+-            # 转为base64返回
+-            from io import BytesIO
+-            buffered = BytesIO()
+-            generated_image.save(buffered, format="PNG")
+-            img_str = base64.b64encode(buffered.getvalue()).decode()
+-            return jsonify({'image': f"data:image/png;base64,{img_str}"})
+-        else:
+-            return jsonify({'error': '生成图片失败，未返回图片数据'}), 500
++        if not generated_image:
++            raise RuntimeError('生成图片失败，未返回图片数据')
+ 
++        from io import BytesIO
++        buffered = BytesIO()
++        generated_image.save(buffered, format='PNG')
++        img_str = base64.b64encode(buffered.getvalue()).decode()
++
++        _update_image_task(
++            task_id,
++            status='completed',
++            image=f'data:image/png;base64,{img_str}',
++            finished_at=time.time(),
++        )
+     except Exception as e:
+-        print(f"Generate Image Error: {e}")
+-        return jsonify({'error': str(e)}), 500
++        print(f"Generate Image Task {task_id} Error: {e}")
++        _update_image_task(
++            task_id,
++            status='failed',
++            error=str(e),
++            finished_at=time.time(),
++        )
+     finally:
+-        # 清理临时文件
+         for path in temp_files:
+             try:
+                 if os.path.exists(path):
+@@ -585,6 +603,104 @@
+                 print(f"Error removing temp file {path}: {e}")
+ 
+ 
++@app.route('/api/generate-image', methods=['POST'])
++def generate_image():
++    """提交图片生成任务并立即返回 task_id。"""
++    try:
++        data = request.get_json(silent=True) or {}
++        prompt = data.get('prompt', '')
++        images = data.get('images', [])
++        options = data.get('options') or {}
++        provider = data.get('provider') or config_manager.get_image_provider()
++
++        if provider not in IMAGE_PROVIDER_META:
++            return jsonify({'error': f'未知图片生成渠道: {provider}'}), 400
++        if not prompt:
++            return jsonify({'error': '提示词不能为空'}), 400
++        if not isinstance(images, list):
++            return jsonify({'error': 'images 必须是数组'}), 400
++        if not isinstance(options, dict):
++            return jsonify({'error': '生成参数必须是 JSON 对象'}), 400
++
++        credentials = config_manager.get_image_provider_config(provider)
++        model = (data.get('model') or credentials.get('model') or '').strip()
++        if not model:
++            return jsonify({'error': '图片模型不能为空'}), 400
++        credentials = dict(credentials)
++        credentials['model'] = model
++
++        if not options:
++            options = {
++                'aspect_ratio': data.get('aspect_ratio', '1:1'),
++                'image_size': data.get('image_size', '2K'),
++                'thinking_level': data.get('thinking_level', 'low'),
++            }
++
++        # 保存本次选择；真正耗时的生成放到线程池。
++        config_manager.set_active_image_selection(provider, model)
++        config_manager.save_image_generation_options(provider, model, options)
++
++        _cleanup_image_tasks()
++        task_id = uuid.uuid4().hex
++        now = time.time()
++        with image_tasks_lock:
++            image_tasks[task_id] = {
++                'status': 'queued',
++                'created_at': now,
++                'updated_at': now,
++            }
++
++        try:
++            image_executor.submit(
++                _run_image_generation_task,
++                task_id,
++                prompt,
++                list(images),
++                provider,
++                credentials,
++
