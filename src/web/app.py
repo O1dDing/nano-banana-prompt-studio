@@ -12,11 +12,16 @@ from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
 import json
 import base64
+import threading
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, List
 
 from utils.yaml_handler import YamlHandler
 from utils.preset_manager import PresetManager
 from utils.ai_config import AIConfigManager
+from utils.stage1_web_search import stream_stage1
 from components.image_clients import (
     create_image_provider_from_credentials,
     get_image_provider_capabilities,
@@ -32,6 +37,17 @@ yaml_handler = YamlHandler()
 preset_manager = PresetManager()
 config_manager = AIConfigManager()
 CATEGORY_PRESET_SCOPES = {"basic", "scene", "subject", "camera", "aesthetic"}
+
+# 图片生成任务池：避免单个 HTTP 请求长时间阻塞并触发 Cloudflare 524。
+# 注意：任务状态保存在当前 Python 进程内存，因此生产运行时必须保持单进程。
+IMAGE_TASK_MAX_WORKERS = max(1, int(os.getenv("IMAGE_TASK_MAX_WORKERS", "2")))
+IMAGE_TASK_TTL_SECONDS = max(60, int(os.getenv("IMAGE_TASK_TTL_SECONDS", "1800")))
+image_executor = ThreadPoolExecutor(
+    max_workers=IMAGE_TASK_MAX_WORKERS,
+    thread_name_prefix="image-gen",
+)
+image_tasks = {}
+image_tasks_lock = threading.Lock()
 
 
 @app.route('/')
@@ -55,6 +71,7 @@ def get_config():
         safe_config = {
             'base_url': config.get('base_url', ''),
             'model': config.get('model', ''),
+            'chat_web_search_mode': config.get('chat_web_search_mode', 'auto'),
             'image_provider': config.get('image_provider', '') or 'gemini',
             'gemini_base_url': config.get('gemini_base_url', ''),
             'gemini_model': config.get('gemini_model', ''),
@@ -142,6 +159,11 @@ def update_config():
             config['api_key'] = data['api_key']
         if 'model' in data:
             config['model'] = data['model']
+        if 'chat_web_search_mode' in data:
+            mode = str(data['chat_web_search_mode']).strip().lower()
+            if mode not in {'disabled', 'auto', 'force'}:
+                return jsonify({'error': '第一阶段联网模式必须为 disabled / auto / force'}), 400
+            config['chat_web_search_mode'] = mode
         if 'image_provider' in data:
             config['image_provider'] = data['image_provider']
         if 'gemini_base_url' in data:
@@ -392,6 +414,7 @@ def generate_prompt():
         base_url = config.get('base_url', '').rstrip('/')
         api_key = config.get('api_key', '')
         model = config.get('model', 'gpt-4o-mini')
+        web_search_mode = config.get('chat_web_search_mode', 'auto')
         
         if not api_key:
             return jsonify({'error': '请先配置API密钥'}), 400
@@ -446,23 +469,20 @@ def generate_prompt():
             thinking_reported = False
             try:
                 yield f"data: {json.dumps({'status': 'started'})}\n\n"
-                stream = client.chat.completions.create(
+                for event in stream_stage1(
+                    client=client,
+                    base_url=base_url,
+                    api_key=api_key,
                     model=model,
                     messages=messages,
-                    stream=True,
-                )
-                
-                for chunk in stream:
-                    if chunk.choices and len(chunk.choices) > 0:
-                        delta = chunk.choices[0].delta
-                        reasoning_content = getattr(delta, 'reasoning_content', None)
-                        if reasoning_content and not thinking_reported:
-                            thinking_reported = True
-                            yield f"data: {json.dumps({'status': 'thinking'})}\n\n"
-
-                        if delta and delta.content:
-                            # 发送SSE格式的数据
-                            yield f"data: {json.dumps({'content': delta.content})}\n\n"
+                    web_search_mode=web_search_mode,
+                ):
+                    if event.get('type') == 'thinking' and not thinking_reported:
+                        thinking_reported = True
+                        yield f"data: {json.dumps({'status': 'thinking'})}\n\n"
+                    if event.get('type') == 'content' and event.get('content'):
+                        # 发送SSE格式的数据
+                        yield f"data: {json.dumps({'content': event['content']})}\n\n"
                 
                 yield "data: [DONE]\n\n"
             except Exception as e:
@@ -480,23 +500,133 @@ def generate_prompt():
 
 
 
+def _update_image_task(task_id, **changes):
+    """线程安全地更新图片生成任务。"""
+    with image_tasks_lock:
+        task = image_tasks.get(task_id)
+        if task is None:
+            return
+        task.update(changes)
+        task['updated_at'] = time.time()
+
+
+def _cleanup_image_tasks():
+    """清理已结束且超过 TTL 的任务，避免 Base64 结果长期占用内存。"""
+    now = time.time()
+    with image_tasks_lock:
+        expired_ids = [
+            task_id
+            for task_id, task in image_tasks.items()
+            if task.get('status') in {'completed', 'failed'}
+            and now - task.get('updated_at', now) > IMAGE_TASK_TTL_SECONDS
+        ]
+        for task_id in expired_ids:
+            image_tasks.pop(task_id, None)
+
+
+def _run_image_generation_task(task_id, prompt, images, provider, credentials, model, options):
+    """在线程池中执行耗时的图片生成，不依赖 Flask request context。"""
+    temp_files = []
+    _update_image_task(task_id, status='processing')
+
+    try:
+        import tempfile
+
+        processed_images = []
+        for img_str in images or []:
+            if isinstance(img_str, str) and img_str.startswith('data:'):
+                try:
+                    # Data URI: data:image/png;base64,xxxx
+                    header, encoded = img_str.split(';base64,', 1)
+                    mime_type = header.split(':', 1)[1]
+                    ext_map = {
+                        'image/jpeg': '.jpg',
+                        'image/png': '.png',
+                        'image/webp': '.webp',
+                        'image/gif': '.gif',
+                        'image/bmp': '.bmp',
+                    }
+                    ext = ext_map.get(mime_type, '.jpg')
+                    img_data = base64.b64decode(encoded)
+                    fd, path = tempfile.mkstemp(suffix=ext)
+                    with os.fdopen(fd, 'wb') as f:
+                        f.write(img_data)
+                    temp_files.append(path)
+                    processed_images.append(path)
+                except Exception as e:
+                    print(f"Error processing image for task {task_id}: {e}")
+                    processed_images.append(img_str)
+            else:
+                processed_images.append(img_str)
+
+        client = create_image_provider_from_credentials(
+            provider,
+            credentials['base_url'],
+            credentials['api_key'],
+            model,
+        )
+        client.set_generation_options(options)
+
+        generated_image = client.generate_image(
+            text=prompt,
+            images=processed_images if processed_images else None,
+        )
+
+        if not generated_image:
+            raise RuntimeError('生成图片失败，未返回图片数据')
+
+        from io import BytesIO
+        buffered = BytesIO()
+        generated_image.save(buffered, format='PNG')
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+
+        _update_image_task(
+            task_id,
+            status='completed',
+            image=f'data:image/png;base64,{img_str}',
+            finished_at=time.time(),
+        )
+    except Exception as e:
+        print(f"Generate Image Task {task_id} Error: {e}")
+        _update_image_task(
+            task_id,
+            status='failed',
+            error=str(e),
+            finished_at=time.time(),
+        )
+    finally:
+        for path in temp_files:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception as e:
+                print(f"Error removing temp file {path}: {e}")
+
+
 @app.route('/api/generate-image', methods=['POST'])
 def generate_image():
-    """生成图片"""
-    temp_files = []
+    """提交图片生成任务并立即返回 task_id。"""
     try:
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         prompt = data.get('prompt', '')
         images = data.get('images', [])
         options = data.get('options') or {}
         provider = data.get('provider') or config_manager.get_image_provider()
+
         if provider not in IMAGE_PROVIDER_META:
             return jsonify({'error': f'未知图片生成渠道: {provider}'}), 400
+        if not prompt:
+            return jsonify({'error': '提示词不能为空'}), 400
+        if not isinstance(images, list):
+            return jsonify({'error': 'images 必须是数组'}), 400
+        if not isinstance(options, dict):
+            return jsonify({'error': '生成参数必须是 JSON 对象'}), 400
 
         credentials = config_manager.get_image_provider_config(provider)
-        model = (data.get('model') or credentials['model']).strip()
+        model = (data.get('model') or credentials.get('model') or '').strip()
         if not model:
             return jsonify({'error': '图片模型不能为空'}), 400
+        credentials = dict(credentials)
         credentials['model'] = model
 
         if not options:
@@ -506,83 +636,69 @@ def generate_image():
                 'thinking_level': data.get('thinking_level', 'low'),
             }
 
-        if not prompt:
-            return jsonify({'error': '提示词不能为空'}), 400
-
-        # 处理图片数据：如果是Data URI，转为临时文件
-        import tempfile
-        processed_images = []
-        if images:
-            for img_str in images:
-                if isinstance(img_str, str) and img_str.startswith('data:'):
-                    try:
-                        # 解析Data URI: data:image/png;base64,xxxx
-                        header, encoded = img_str.split(';base64,')
-                        mime_type = header.split(':')[1]
-                        
-                        # 确定扩展名
-                        ext_map = {
-                            'image/jpeg': '.jpg',
-                            'image/png': '.png',
-                            'image/webp': '.webp',
-                            'image/gif': '.gif',
-                            'image/bmp': '.bmp'
-                        }
-                        ext = ext_map.get(mime_type, '.jpg')
-                        
-                        # 解码并保存到临时文件
-                        img_data = base64.b64decode(encoded)
-                        fd, path = tempfile.mkstemp(suffix=ext)
-                        with os.fdopen(fd, 'wb') as f:
-                            f.write(img_data)
-                        
-                        temp_files.append(path)
-                        processed_images.append(path)
-                    except Exception as e:
-                        print(f"Error processing image: {e}")
-                        # 如果解析失败，尝试原样传递（虽然可能也会失败）
-                        processed_images.append(img_str)
-                else:
-                    processed_images.append(img_str)
-
-        # 使用请求开始时的渠道和模型快照，避免全局配置变化影响本次生成。
-        client = create_image_provider_from_credentials(
-            provider,
-            credentials['base_url'],
-            credentials['api_key'],
-            model,
-        )
-        client.set_generation_options(options)
+        # 保存本次选择；真正耗时的生成放到线程池。
         config_manager.set_active_image_selection(provider, model)
         config_manager.save_image_generation_options(provider, model, options)
 
-        # 生成图片
-        generated_image = client.generate_image(
-            text=prompt,
-            images=processed_images if processed_images else None
-        )
+        _cleanup_image_tasks()
+        task_id = uuid.uuid4().hex
+        now = time.time()
+        with image_tasks_lock:
+            image_tasks[task_id] = {
+                'status': 'queued',
+                'created_at': now,
+                'updated_at': now,
+            }
 
-        if generated_image:
-            # 转为base64返回
-            from io import BytesIO
-            buffered = BytesIO()
-            generated_image.save(buffered, format="PNG")
-            img_str = base64.b64encode(buffered.getvalue()).decode()
-            return jsonify({'image': f"data:image/png;base64,{img_str}"})
-        else:
-            return jsonify({'error': '生成图片失败，未返回图片数据'}), 500
+        try:
+            image_executor.submit(
+                _run_image_generation_task,
+                task_id,
+                prompt,
+                list(images),
+                provider,
+                credentials,
+                model,
+                dict(options),
+            )
+        except Exception:
+            with image_tasks_lock:
+                image_tasks.pop(task_id, None)
+            raise
 
+        response = jsonify({'task_id': task_id, 'status': 'queued'})
+        response.status_code = 202
+        response.headers['Cache-Control'] = 'no-store'
+        return response
     except Exception as e:
-        print(f"Generate Image Error: {e}")
+        print(f"Submit Generate Image Error: {e}")
         return jsonify({'error': str(e)}), 500
-    finally:
-        # 清理临时文件
-        for path in temp_files:
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-            except Exception as e:
-                print(f"Error removing temp file {path}: {e}")
+
+
+@app.route('/api/generate-image/status/<task_id>', methods=['GET'])
+def get_image_generation_status(task_id):
+    """查询图片生成任务状态。"""
+    _cleanup_image_tasks()
+
+    with image_tasks_lock:
+        task = image_tasks.get(task_id)
+        task_snapshot = dict(task) if task else None
+
+    if task_snapshot is None:
+        response = jsonify({'error': '任务不存在或已过期'})
+        response.status_code = 404
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+
+    payload = {'task_id': task_id, 'status': task_snapshot['status']}
+    if task_snapshot['status'] == 'completed':
+        payload['image'] = task_snapshot.get('image')
+    elif task_snapshot['status'] == 'failed':
+        payload['error'] = task_snapshot.get('error', '生成失败')
+
+    response = jsonify(payload)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @app.route('/api/modify', methods=['POST'])
@@ -606,6 +722,7 @@ def modify_prompt():
         base_url = config.get('base_url', '').rstrip('/')
         api_key = config.get('api_key', '')
         model = config.get('model', 'gpt-4o-mini')
+        web_search_mode = config.get('chat_web_search_mode', 'auto')
         
         if not api_key:
             return jsonify({'error': '请先配置API密钥'}), 400
@@ -657,22 +774,19 @@ def modify_prompt():
             thinking_reported = False
             try:
                 yield f"data: {json.dumps({'status': 'started'})}\n\n"
-                stream = client.chat.completions.create(
+                for event in stream_stage1(
+                    client=client,
+                    base_url=base_url,
+                    api_key=api_key,
                     model=model,
                     messages=messages,
-                    stream=True,
-                )
-                
-                for chunk in stream:
-                    if chunk.choices and len(chunk.choices) > 0:
-                        delta = chunk.choices[0].delta
-                        reasoning_content = getattr(delta, 'reasoning_content', None)
-                        if reasoning_content and not thinking_reported:
-                            thinking_reported = True
-                            yield f"data: {json.dumps({'status': 'thinking'})}\n\n"
-
-                        if delta and delta.content:
-                            yield f"data: {json.dumps({'content': delta.content})}\n\n"
+                    web_search_mode=web_search_mode,
+                ):
+                    if event.get('type') == 'thinking' and not thinking_reported:
+                        thinking_reported = True
+                        yield f"data: {json.dumps({'status': 'thinking'})}\n\n"
+                    if event.get('type') == 'content' and event.get('content'):
+                        yield f"data: {json.dumps({'content': event['content']})}\n\n"
                 
                 yield "data: [DONE]\n\n"
             except Exception as e:
@@ -701,4 +815,4 @@ if __name__ == '__main__':
     print("按 Ctrl+C 停止服务器")
     print("=" * 60)
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)

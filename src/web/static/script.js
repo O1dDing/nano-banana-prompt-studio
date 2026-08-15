@@ -592,6 +592,28 @@ function updateJsonPreview() {
 // ========================================
 // Config Management
 // ========================================
+
+function ensureChatWebSearchControl() {
+    let select = document.getElementById('configChatWebSearchMode');
+    if (select) return select;
+
+    const modelInput = elements.configModel;
+    const modelGroup = modelInput && modelInput.closest('.form-group');
+    if (!modelGroup) return null;
+
+    const group = document.createElement('div');
+    group.className = 'form-group';
+    group.innerHTML = `
+        <label for="configChatWebSearchMode">第一阶段联网</label>
+        <select id="configChatWebSearchMode" class="select-input">
+            <option value="disabled">禁止联网</option>
+            <option value="auto">自动联网</option>
+            <option value="force">强制联网</option>
+        </select>`;
+    modelGroup.insertAdjacentElement('afterend', group);
+    return group.querySelector('select');
+}
+
 async function loadImageProviders() {
     try {
         const response = await fetch('/api/image-providers');
@@ -623,6 +645,8 @@ function openConfigModal() {
     elements.configBaseUrl.value = state.config.base_url || '';
     elements.configApiKey.value = ''; // Don't show API key
     elements.configModel.value = state.config.model || '';
+    const searchModeSelect = ensureChatWebSearchControl();
+    if (searchModeSelect) searchModeSelect.value = state.config.chat_web_search_mode || 'auto';
 
     const configuredProvider = state.config.image_provider || 'gemini';
     elements.configImageProvider.value = state.imageProviders[configuredProvider]
@@ -651,6 +675,7 @@ async function saveConfigs() {
     const payload = {
         base_url: elements.configBaseUrl.value,
         model: elements.configModel.value,
+        chat_web_search_mode: (document.getElementById('configChatWebSearchMode') || {}).value || 'auto',
         image_provider: elements.configImageProvider.value,
         gemini_base_url: elements.configGeminiBaseUrl.value,
         gemini_model: elements.configGeminiModel.value,
@@ -1427,6 +1452,64 @@ function applyAiResult() {
 // ========================================
 // Image Generation
 // ========================================
+const IMAGE_TASK_POLL_INTERVAL_MS = 2500;
+const IMAGE_TASK_CLIENT_TIMEOUT_MS = 30 * 60 * 1000;
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function readJsonResponse(response) {
+    const text = await response.text();
+    if (!text) return {};
+
+    try {
+        return JSON.parse(text);
+    } catch (e) {
+        const preview = text.replace(/\s+/g, ' ').slice(0, 220);
+        throw new Error(
+            `服务器返回了非 JSON 内容 (HTTP ${response.status})。` +
+            `可能是 Cloudflare Access 登录过期或网关错误。响应: ${preview}`
+        );
+    }
+}
+
+async function waitForImageTask(taskId) {
+    const startedAt = Date.now();
+
+    while (true) {
+        if (Date.now() - startedAt > IMAGE_TASK_CLIENT_TIMEOUT_MS) {
+            throw new Error('图片生成等待超过 30 分钟，已停止前端轮询');
+        }
+
+        const response = await fetch(
+            `/api/generate-image/status/${encodeURIComponent(taskId)}`,
+            {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' },
+                cache: 'no-store'
+            }
+        );
+        const data = await readJsonResponse(response);
+
+        if (!response.ok) {
+            throw new Error(data.error || `查询生成任务失败 (HTTP ${response.status})`);
+        }
+
+        if (data.status === 'completed') {
+            return data;
+        }
+        if (data.status === 'failed') {
+            throw new Error(data.error || '生成图片失败');
+        }
+        if (data.status !== 'queued' && data.status !== 'processing') {
+            throw new Error(`未知任务状态: ${data.status || 'empty'}`);
+        }
+
+        await sleep(IMAGE_TASK_POLL_INTERVAL_MS);
+    }
+}
+
 async function generateImage() {
     // 移动端点击生成后自动关闭侧边栏
     const sidebar = document.getElementById('sidebar');
@@ -1472,9 +1555,13 @@ async function generateImage() {
     });
 
     try {
-        const response = await fetch('/api/generate-image', {
+        // 第一个请求只负责创建后台任务，会很快返回 202 + task_id。
+        const submitResponse = await fetch('/api/generate-image', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
             body: JSON.stringify({
                 prompt: prompt,
                 images: state.uploadedImages,
@@ -1484,9 +1571,18 @@ async function generateImage() {
             })
         });
 
-        const data = await response.json();
+        const submitData = await readJsonResponse(submitResponse);
+        if (!submitResponse.ok) {
+            throw new Error(submitData.error || `提交生成任务失败 (HTTP ${submitResponse.status})`);
+        }
+        if (!submitData.task_id) {
+            throw new Error('服务器没有返回 task_id');
+        }
 
-        if (response.ok && data.image) {
+        // 后续每 2.5 秒查询一次状态。每个 HTTP 请求都很短，不再等待数分钟。
+        const data = await waitForImageTask(submitData.task_id);
+
+        if (data.image) {
             state.currentGeneratedImage = data.image;
 
             // 用 DOM 构建结果，避免把几 MB 的 dataURL 写进 HTML 属性
@@ -1508,7 +1604,7 @@ async function generateImage() {
             elements.resultPreview.replaceChildren(container);
             showToast('图片生成成功!', 'success');
         } else {
-            throw new Error(data.error || '生成失败');
+            throw new Error('任务已完成，但没有返回图片数据');
         }
 
     } catch (e) {

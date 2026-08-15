@@ -15,6 +15,7 @@ class AIConfigManager:
         "base_url": "https://api.openai.com/v1",
         "api_key": "",
         "model": "gpt-5.1",
+        "chat_web_search_mode": "auto",
         "image_provider": "gemini",
         "gemini_base_url": "",
         "gemini_api_key": "",
