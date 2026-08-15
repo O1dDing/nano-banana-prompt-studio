@@ -1,4 +1,4 @@
-name: Install O1dDing custom source
+name: Cleanup O1dDing bootstrap files
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  install:
+  cleanup:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -17,48 +17,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Rebuild exact source bundle
+      - name: Verify custom source exists
         shell: bash
         run: |
-          cat \
-            .github/source-bundle/custom-src.b64.part-00 \
-            .github/source-bundle/custom-src.b64.part-01 \
-            .github/source-bundle/custom-src.b64.part-02 \
-            .github/source-bundle/custom-src.b64.part-03a1 \
-            .github/source-bundle/custom-src.b64.part-03a2 \
-            .github/source-bundle/custom-src.b64.part-03b \
-            .github/source-bundle/custom-src.b64.part-04 \
-            .github/source-bundle/custom-src.b64.part-05 \
-            > /tmp/custom-src.b64
-          test "$(wc -c < /tmp/custom-src.b64)" = "39900"
-          echo '3f93eb526af4aff19845d8443be5d452cfffc5796f8bd89c882333bbc9ffca8d  /tmp/custom-src.b64' | sha256sum -c -
-          base64 -d /tmp/custom-src.b64 > /tmp/custom-src.tar.gz
-          echo '0f85d5db3d1073ba5ca0e5c011d03a96820aab15b75c7f0b2004db181b22acfa  /tmp/custom-src.tar.gz' | sha256sum -c -
-
-      - name: Install exact customized source
-        shell: bash
-        run: tar -xzf /tmp/custom-src.tar.gz -C .
-
-      - name: Validate Python and JavaScript
-        shell: bash
-        run: |
-          python3 -m py_compile src/web/app.py src/utils/ai_config.py src/utils/stage1_web_search.py
-          node --check src/web/static/script.js
+          test -f src/utils/stage1_web_search.py
           grep -q 'chat_web_search_mode' src/utils/ai_config.py
           grep -q 'waitForImageTask' src/web/static/script.js
           grep -q 'generate-image/status' src/web/app.py
 
-      - name: Commit customized source
+      - name: Remove temporary bootstrap files
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/web/app.py src/web/static/script.js src/utils/ai_config.py src/utils/stage1_web_search.py
-          if git diff --cached --quiet; then
-            echo 'Customized source already installed.'
-          else
-            git commit -m 'feat(web): 增加第一阶段联网控制并异步化图片生成'
-            git push origin HEAD:main
-          fi
-
-# install-with-split-03a
+          git rm -r .github/source-bundle .github/patches .github/workflows/apply-o1dding-customizations.yml
+          git commit -m 'chore: 清理临时迁移文件'
+          git push origin HEAD:main
