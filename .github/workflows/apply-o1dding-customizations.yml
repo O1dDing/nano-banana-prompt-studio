@@ -3,14 +3,14 @@ name: Apply O1dDing customizations
 on:
   push:
     paths:
-      - '.github/patches/nano-banana-merged.part-*'
+      - '.github/source-bundle/custom-src.b64.part-*'
       - '.github/workflows/apply-o1dding-customizations.yml'
 
 permissions:
   contents: write
 
 jobs:
-  apply-custom-patch:
+  install-custom-source:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -22,7 +22,8 @@ jobs:
         id: detect
         shell: bash
         run: |
-          if grep -q 'chat_web_search_mode' src/utils/ai_config.py \
+          if test -f src/utils/stage1_web_search.py \
+             && grep -q 'chat_web_search_mode' src/utils/ai_config.py \
              && grep -q 'waitForImageTask' src/web/static/script.js \
              && grep -q 'generate-image/status' src/web/app.py; then
             echo 'already=true' >> "$GITHUB_OUTPUT"
@@ -30,33 +31,19 @@ jobs:
             echo 'already=false' >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Normalize target line endings
+      - name: Rebuild exact source bundle
         if: steps.detect.outputs.already != 'true'
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          for name in ('src/web/app.py', 'src/web/static/script.js', 'src/utils/ai_config.py'):
-              p = Path(name)
-              p.write_bytes(p.read_bytes().replace(b'\r\n', b'\n'))
-          PY
+          cat .github/source-bundle/custom-src.b64.part-* > /tmp/custom-src.b64
+          echo '3f93eb526af4aff19845d8443be5d452cfffc5796f8bd89c882333bbc9ffca8d  /tmp/custom-src.b64' | sha256sum -c -
+          base64 -d /tmp/custom-src.b64 > /tmp/custom-src.tar.gz
+          echo '0f85d5db3d1073ba5ca0e5c011d03a96820aab15b75c7f0b2004db181b22acfa  /tmp/custom-src.tar.gz' | sha256sum -c -
 
-      - name: Rebuild patch
+      - name: Install exact customized source
         if: steps.detect.outputs.already != 'true'
         shell: bash
-        run: |
-          cat .github/patches/nano-banana-merged.part-* > /tmp/nano-banana-merged.patch
-          sha256sum /tmp/nano-banana-merged.patch
-
-      - name: Verify patch with fuzz
-        if: steps.detect.outputs.already != 'true'
-        shell: bash
-        run: patch --batch --dry-run --forward --fuzz=3 -p1 < /tmp/nano-banana-merged.patch
-
-      - name: Apply custom patch
-        if: steps.detect.outputs.already != 'true'
-        shell: bash
-        run: patch --batch --forward --fuzz=3 -p1 < /tmp/nano-banana-merged.patch
+        run: tar -xzf /tmp/custom-src.tar.gz -C .
 
       - name: Validate Python and JavaScript
         if: steps.detect.outputs.already != 'true'
@@ -78,4 +65,4 @@ jobs:
           git commit -m 'feat(web): 增加第一阶段联网控制并异步化图片生成'
           git push origin HEAD:main
 
-# bootstrap-trigger-v4
+# source-bundle-bootstrap
