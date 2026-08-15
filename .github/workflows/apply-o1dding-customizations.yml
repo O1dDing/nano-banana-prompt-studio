@@ -35,8 +35,7 @@ jobs:
         if: steps.detect.outputs.already != 'true'
         shell: bash
         run: |
-          cat .github/source-bundle/custom-src.b64.part-* > /tmp/custom-src.b64
-          echo '3f93eb526af4aff19845d8443be5d452cfffc5796f8bd89c882333bbc9ffca8d  /tmp/custom-src.b64' | sha256sum -c -
+          cat .github/source-bundle/custom-src.b64.part-* | tr -d '\r\n' > /tmp/custom-src.b64
           base64 -d /tmp/custom-src.b64 > /tmp/custom-src.tar.gz
           echo '0f85d5db3d1073ba5ca0e5c011d03a96820aab15b75c7f0b2004db181b22acfa  /tmp/custom-src.tar.gz' | sha256sum -c -
 
@@ -65,4 +64,4 @@ jobs:
           git commit -m 'feat(web): 增加第一阶段联网控制并异步化图片生成'
           git push origin HEAD:main
 
-# source-bundle-bootstrap
+# source-bundle-bootstrap-v2
