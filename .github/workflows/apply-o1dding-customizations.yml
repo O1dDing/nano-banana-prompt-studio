@@ -35,7 +35,7 @@ jobs:
         shell: bash
         run: |
           cat .github/patches/nano-banana-merged.part-* > /tmp/nano-banana-merged.patch
-          echo 'b003a68ddee2a5bf29a7fdd2dcb761c930c0d97d3330ad67501ab804edc3f2bf  /tmp/nano-banana-merged.patch' | sha256sum -c -
+          sha256sum /tmp/nano-banana-merged.patch
           git apply --check /tmp/nano-banana-merged.patch
 
       - name: Apply custom patch
@@ -60,4 +60,4 @@ jobs:
           git commit -m 'feat(web): 增加第一阶段联网控制并异步化图片生成'
           git push origin HEAD:main
 
-# bootstrap-trigger
+# bootstrap-trigger-v2
