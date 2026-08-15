@@ -1,4 +1,4 @@
-name: Apply O1dDing customizations
+name: Diagnose O1dDing source bundle
 
 on:
   push:
@@ -9,69 +9,12 @@ permissions:
   contents: write
 
 jobs:
-  install-custom-source:
+  diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Detect existing customization
-        id: detect
+      - uses: actions/checkout@v4
+      - name: Show bundle part sizes and hashes
         shell: bash
         run: |
-          if test -f src/utils/stage1_web_search.py \
-             && grep -q 'chat_web_search_mode' src/utils/ai_config.py \
-             && grep -q 'waitForImageTask' src/web/static/script.js \
-             && grep -q 'generate-image/status' src/web/app.py; then
-            echo 'already=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'already=false' >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Rebuild source bundle
-        if: steps.detect.outputs.already != 'true'
-        shell: bash
-        run: |
-          cat \
-            .github/source-bundle/custom-src.b64.part-00 \
-            .github/source-bundle/custom-src.b64.part-01 \
-            .github/source-bundle/custom-src.b64.part-02 \
-            .github/source-bundle/custom-src.b64.part-03 \
-            .github/source-bundle/custom-src.b64.part-03b \
-            .github/source-bundle/custom-src.b64.part-04 \
-            .github/source-bundle/custom-src.b64.part-05 \
-            > /tmp/custom-src.b64
-          wc -c /tmp/custom-src.b64
-          sha256sum /tmp/custom-src.b64
-          base64 -d /tmp/custom-src.b64 > /tmp/custom-src.tar.gz
-          sha256sum /tmp/custom-src.tar.gz
-          tar -tzf /tmp/custom-src.tar.gz
-
-      - name: Install exact customized source
-        if: steps.detect.outputs.already != 'true'
-        shell: bash
-        run: tar -xzf /tmp/custom-src.tar.gz -C .
-
-      - name: Validate Python and JavaScript
-        if: steps.detect.outputs.already != 'true'
-        shell: bash
-        run: |
-          python3 -m py_compile src/web/app.py src/utils/ai_config.py src/utils/stage1_web_search.py
-          node --check src/web/static/script.js
-          grep -q 'chat_web_search_mode' src/utils/ai_config.py
-          grep -q 'waitForImageTask' src/web/static/script.js
-          grep -q 'generate-image/status' src/web/app.py
-
-      - name: Commit customized source
-        if: steps.detect.outputs.already != 'true'
-        shell: bash
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/web/app.py src/web/static/script.js src/utils/ai_config.py src/utils/stage1_web_search.py
-          git commit -m 'feat(web): 增加第一阶段联网控制并异步化图片生成'
-          git push origin HEAD:main
-
-# bundle-diagnostic-and-install
+          wc -c .github/source-bundle/custom-src.b64.part-*
+          sha256sum .github/source-bundle/custom-src.b64.part-*
