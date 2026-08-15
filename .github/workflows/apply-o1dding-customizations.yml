@@ -38,22 +38,25 @@ jobs:
           from pathlib import Path
           for name in ('src/web/app.py', 'src/web/static/script.js', 'src/utils/ai_config.py'):
               p = Path(name)
-              data = p.read_bytes().replace(b'\r\n', b'\n')
-              p.write_bytes(data)
+              p.write_bytes(p.read_bytes().replace(b'\r\n', b'\n'))
           PY
 
-      - name: Rebuild and verify patch
+      - name: Rebuild patch
         if: steps.detect.outputs.already != 'true'
         shell: bash
         run: |
           cat .github/patches/nano-banana-merged.part-* > /tmp/nano-banana-merged.patch
           sha256sum /tmp/nano-banana-merged.patch
-          git apply --check /tmp/nano-banana-merged.patch
+
+      - name: Verify patch with fuzz
+        if: steps.detect.outputs.already != 'true'
+        shell: bash
+        run: patch --batch --dry-run --forward --fuzz=3 -p1 < /tmp/nano-banana-merged.patch
 
       - name: Apply custom patch
         if: steps.detect.outputs.already != 'true'
         shell: bash
-        run: git apply --whitespace=nowarn /tmp/nano-banana-merged.patch
+        run: patch --batch --forward --fuzz=3 -p1 < /tmp/nano-banana-merged.patch
 
       - name: Validate Python and JavaScript
         if: steps.detect.outputs.already != 'true'
@@ -61,6 +64,9 @@ jobs:
         run: |
           python3 -m py_compile src/web/app.py src/utils/ai_config.py src/utils/stage1_web_search.py
           node --check src/web/static/script.js
+          grep -q 'chat_web_search_mode' src/utils/ai_config.py
+          grep -q 'waitForImageTask' src/web/static/script.js
+          grep -q 'generate-image/status' src/web/app.py
 
       - name: Commit customized source
         if: steps.detect.outputs.already != 'true'
@@ -72,4 +78,4 @@ jobs:
           git commit -m 'feat(web): 增加第一阶段联网控制并异步化图片生成'
           git push origin HEAD:main
 
-# bootstrap-trigger-v3
+# bootstrap-trigger-v4
