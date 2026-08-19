@@ -118,24 +118,7 @@ function renderDiff(changes) {
 }
 
 function handleAiImageUpload(e) {
-    const files = Array.from(e.target.files);
-    files.forEach(file => {
-        if (!file.type.startsWith('image/')) {
-            showToast('请选择图片', 'error');
-            return;
-        }
-        const reader = new FileReader();
-        reader.onload = (evt) => {
-            const data = evt.target.result;
-            if (aiUploadedImages.length >= 3) {
-                showToast('最多上传3张', 'warning');
-                return;
-            }
-            aiUploadedImages.push(data);
-            renderAiUploadedImages();
-        };
-        reader.readAsDataURL(file);
-    });
+    addImageFilesToList(e.target.files, aiUploadedImages, renderAiUploadedImages);
     e.target.value = ''; // reset
 }
 
@@ -187,7 +170,8 @@ function openAiModal(mode) {
     elements.aiPromptInput.value = '';
     elements.aiResponsePreview.value = '';
     elements.aiStatusText.textContent = '';
-    aiUploadedImages = [];
+    // 原地清空：拖拽/粘贴上传的闭包持有该数组引用，不能重新赋值
+    aiUploadedImages.length = 0;
     renderAiUploadedImages();
     latestDiffChanges = [];
 

@@ -24,13 +24,20 @@ from PyQt6.QtWidgets import (
     QTabWidget,
 )
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QFont, QIcon, QPixmap
+from PyQt6.QtGui import QAction, QFont, QIcon, QKeySequence, QPixmap
 
+from nano_banana.core.chat import strip_code_fences
 from nano_banana.core.config import AIConfigManager
 from nano_banana.core.images.provider_config import IMAGE_PROVIDER_META
 from nano_banana.desktop.ai_service import AIService
 from nano_banana.desktop.dialogs.config_dialog import UnifiedAIConfigDialog
-from nano_banana.desktop.window_utils import fit_window_to_screen
+from nano_banana.desktop.window_utils import (
+    extract_image_paths,
+    fit_window_to_screen,
+    get_last_dir,
+    remember_last_dir,
+    save_clipboard_image,
+)
 
 
 class AIGenerateDialog(QDialog):
@@ -47,7 +54,31 @@ class AIGenerateDialog(QDialog):
         self._full_content = ""
         self.selected_images: List[str] = []
         self._setup_ui()
-    
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if extract_image_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        paths = extract_image_paths(event.mimeData())
+        if paths:
+            self._add_image_paths(paths)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+    def keyPressEvent(self, event):
+        # 焦点不在文本框时 Ctrl+V 粘贴剪贴板图片
+        if event.matches(QKeySequence.StandardKey.Paste):
+            path = save_clipboard_image()
+            if path:
+                self._add_image_paths([path])
+                return
+        super().keyPressEvent(event)
+
     def _setup_ui(self):
         self.setWindowTitle("AI 生成提示词")
         fit_window_to_screen(self, 1100, 750, min_width=900, min_height=620)
@@ -370,14 +401,21 @@ class AIGenerateDialog(QDialog):
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "选择参考图片",
-            "",
+            get_last_dir("reference"),
             "图像文件 (*.png *.jpg *.jpeg *.webp *.bmp)"
         )
         if not files:
             return
-        
+        remember_last_dir(files[0], "reference")
+        self._add_image_paths(files)
+
+    def _add_image_paths(self, paths: List[str]):
+        """拖拽/粘贴/文件对话框共用的添加入口。"""
         remaining = 3 - len(self.selected_images)
-        for path in files[:remaining]:
+        if remaining <= 0:
+            self.status_label.setText("最多只能选择 3 张参考图")
+            return
+        for path in paths[:remaining]:
             if path not in self.selected_images:
                 self.selected_images.append(path)
                 self._append_image_item(path)
@@ -563,13 +601,7 @@ class AIGenerateDialog(QDialog):
             return
         
         # 清理代码块标记
-        if content.startswith("``json"):
-            content = content[7:]
-        elif content.startswith("```"):
-            content = content[3:]
-        if content.endswith("```"):
-            content = content[:-3]
-        content = content.strip()
+        content = strip_code_fences(content)
         
         # 解析JSON
         try:

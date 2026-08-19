@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QDialog,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QUrl
-from PyQt6.QtGui import QFont, QAction, QPixmap, QIcon, QCursor, QDesktopServices
+from PyQt6.QtGui import QFont, QAction, QKeySequence, QPixmap, QIcon, QCursor, QDesktopServices
 
 try:
     import pyperclip
@@ -47,7 +47,12 @@ from nano_banana.core.prompt_doc import flatten, nest, order_document, subset
 from nano_banana.core.schema import default_negative_prompt, get_schema
 from nano_banana.desktop.form_panel import add_schema_field_groups
 from nano_banana.desktop.image_gen import ImageGenController
-from nano_banana.desktop.window_utils import fit_window_to_screen
+from nano_banana.desktop.window_utils import (
+    app_settings,
+    extract_image_paths,
+    fit_window_to_screen,
+    save_clipboard_image,
+)
 
 
 DEFAULT_NEGATIVE_PROMPT = default_negative_prompt()
@@ -71,6 +76,7 @@ class PromptGeneratorApp(ImageGenController, QMainWindow):
         self.image_buttons = []  # 存储图片按钮的列表
         self.generated_image_bytes = None
         self.generated_pixmap = None
+        self.image_history = []  # [(bytes, pixmap)]，最新的在末尾
         self.worker_thread = None
         self.image_option_widgets = {}
         self._active_image_provider = ""
@@ -78,18 +84,69 @@ class PromptGeneratorApp(ImageGenController, QMainWindow):
 
         self._setup_window()
         self._setup_ui()
+        self._restore_ui_state()
         self._load_presets_to_selector()
+        self.setAcceptDrops(True)
 
     def _setup_window(self):
         self.setWindowTitle("Nano Banana 生图工具")
         # 尺寸按屏幕可用区域钳制，小分辨率/高DPI缩放下不会超出屏幕
         fit_window_to_screen(self, 1400, 900, min_width=1200, min_height=800)
+        # 恢复上次的窗口位置和大小
+        geometry = app_settings().value("main_window/geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
         self.setStyleSheet(LIGHT_THEME)
         
         # 设置窗口图标
         icon_path = get_images_dir() / "logo.png"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
+
+    def _restore_ui_state(self):
+        """恢复分割条布局和 JSON 列可见性。"""
+        settings = app_settings()
+        splitter_state = settings.value("main_window/splitter")
+        if splitter_state is None:
+            return
+        json_visible = settings.value("main_window/json_visible", False, bool)
+        self.json_preview_visible = json_visible
+        self.json_preview_area.setVisible(json_visible)
+        self.json_toggle_btn.setText("JSON隐藏" if json_visible else "JSON浏览")
+        self.main_splitter.restoreState(splitter_state)
+
+    def closeEvent(self, event):
+        """退出时保存窗口几何与布局状态。"""
+        settings = app_settings()
+        settings.setValue("main_window/geometry", self.saveGeometry())
+        settings.setValue("main_window/splitter", self.main_splitter.saveState())
+        settings.setValue("main_window/json_visible", self.json_preview_visible)
+        super().closeEvent(event)
+
+    # ========== 拖拽 / 粘贴参考图 ==========
+
+    def dragEnterEvent(self, event):
+        if extract_image_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        paths = extract_image_paths(event.mimeData())
+        if paths:
+            self._add_reference_paths(paths)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+    def keyPressEvent(self, event):
+        # 文本框会自行消费 Ctrl+V，只有焦点不在输入控件时才会到这里
+        if event.matches(QKeySequence.StandardKey.Paste):
+            path = save_clipboard_image()
+            if path:
+                self._add_reference_paths([path])
+                return
+        super().keyPressEvent(event)
 
     def _setup_ui(self):
         central_widget = QWidget()
@@ -593,6 +650,13 @@ class PromptGeneratorApp(ImageGenController, QMainWindow):
         layout.addStretch()
 
         # 右侧按钮组：生图相关按钮
+        self.copy_image_btn = QPushButton("复制图片")
+        self.copy_image_btn.setObjectName("secondaryButton")
+        self.copy_image_btn.setEnabled(False)
+        self.copy_image_btn.setToolTip("把当前生成的图片复制到剪贴板")
+        self.copy_image_btn.clicked.connect(self._copy_image_to_clipboard)
+        layout.addWidget(self.copy_image_btn)
+
         self.save_image_btn = QPushButton("保存图片")
         self.save_image_btn.setObjectName("secondaryButton")
         self.save_image_btn.setEnabled(False)
@@ -969,6 +1033,8 @@ class PromptGeneratorApp(ImageGenController, QMainWindow):
                 self.preview_area.clearSourcePixmap()
             if hasattr(self, 'save_image_btn'):
                 self.save_image_btn.setEnabled(False)
+            if hasattr(self, 'copy_image_btn'):
+                self.copy_image_btn.setEnabled(False)
             if hasattr(self, 'image_status_label'):
                 self._set_image_status("准备就绪")
             # 禁用预览功能

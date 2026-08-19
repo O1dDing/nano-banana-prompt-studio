@@ -24,12 +24,19 @@ from PyQt6.QtWidgets import (
     QTabWidget,
 )
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QFont, QIcon, QPixmap
+from PyQt6.QtGui import QAction, QFont, QIcon, QKeySequence, QPixmap
 
+from nano_banana.core.chat import strip_code_fences
 from nano_banana.core.config import AIConfigManager
 from nano_banana.core.images.provider_config import IMAGE_PROVIDER_META
 from nano_banana.desktop.ai_service import AIService
-from nano_banana.desktop.window_utils import fit_window_to_screen
+from nano_banana.desktop.window_utils import (
+    extract_image_paths,
+    fit_window_to_screen,
+    get_last_dir,
+    remember_last_dir,
+    save_clipboard_image,
+)
 
 
 class AIModifyDialog(QDialog):
@@ -50,7 +57,31 @@ class AIModifyDialog(QDialog):
         self.diff_items = []  # 存储差异项信息
         self.diff_checkboxes = {}  # 存储路径到复选框的映射
         self._setup_ui()
-    
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if extract_image_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        paths = extract_image_paths(event.mimeData())
+        if paths:
+            self._add_image_paths(paths)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+    def keyPressEvent(self, event):
+        # 焦点不在文本框时 Ctrl+V 粘贴剪贴板图片
+        if event.matches(QKeySequence.StandardKey.Paste):
+            path = save_clipboard_image()
+            if path:
+                self._add_image_paths([path])
+                return
+        super().keyPressEvent(event)
+
     def _setup_ui(self):
         self.setWindowTitle("AI 修改提示词")
         fit_window_to_screen(self, 1100, 750, min_width=900, min_height=620)
@@ -416,14 +447,21 @@ class AIModifyDialog(QDialog):
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "选择参考图片",
-            "",
+            get_last_dir("reference"),
             "图像文件 (*.png *.jpg *.jpeg *.webp *.bmp)"
         )
         if not files:
             return
-        
+        remember_last_dir(files[0], "reference")
+        self._add_image_paths(files)
+
+    def _add_image_paths(self, paths: List[str]):
+        """拖拽/粘贴/文件对话框共用的添加入口。"""
         remaining = 3 - len(self.selected_images)
-        for path in files[:remaining]:
+        if remaining <= 0:
+            self.status_label.setText("最多只能选择 3 张参考图")
+            return
+        for path in paths[:remaining]:
             if path not in self.selected_images:
                 self.selected_images.append(path)
                 self._append_image_item(path)
@@ -583,7 +621,7 @@ class AIModifyDialog(QDialog):
         
         # 尝试解析JSON验证有效性
         try:
-            self.modified_data = json.loads(self._full_content)
+            self.modified_data = json.loads(strip_code_fences(self._full_content))
             self.apply_btn.setEnabled(True)
             # 将应用按钮改为蓝色高亮样式
             self.apply_btn.setObjectName("primaryButton")
@@ -888,7 +926,7 @@ class AIModifyDialog(QDialog):
         try:
             if not self.modified_data:
                 if self._full_content:
-                    self.modified_data = json.loads(self._full_content)
+                    self.modified_data = json.loads(strip_code_fences(self._full_content))
                 else:
                     QMessageBox.critical(self, "错误", "没有有效的修改数据可应用")
                     return

@@ -59,6 +59,11 @@ class ImageGenerationThread(QThread):
             "thinking_level": thinking_level,
         }
         self.image_config = dict(image_config or AIConfigManager().get_active_image_config())
+        self._cancelled = False
+
+    def cancel(self):
+        """标记取消：无法中断进行中的 HTTP 请求，但完成后不再发任何信号。"""
+        self._cancelled = True
 
     def run(self):
         try:
@@ -79,6 +84,8 @@ class ImageGenerationThread(QThread):
                 text=self.prompt,
                 images=self.image_paths if self.image_paths else None,
             )
+            if self._cancelled:
+                return
             if image is None:
                 self.error.emit("未生成图片，请尝试调整提示词或参数")
                 return
@@ -87,7 +94,8 @@ class ImageGenerationThread(QThread):
             image.save(buffer, format="PNG")
             self.image_ready.emit(buffer.getvalue())
         except Exception as exc:  # noqa: BLE001
-            self.error.emit(str(exc))
+            if not self._cancelled:
+                self.error.emit(str(exc))
 
 
 class GeminiImageConfigDialog(QDialog):

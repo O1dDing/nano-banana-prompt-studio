@@ -1,6 +1,9 @@
 """桌面端生图控件与生成流程。"""
 import json
+import os
+import time
 from PyQt6.QtWidgets import (
+    QApplication,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -11,15 +14,20 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QComboBox,
     QFileDialog,
+    QListWidget,
+    QListWidgetItem,
     QSizePolicy,
 )
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPixmap, QImage, QCursor
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtGui import QPixmap, QImage, QCursor, QIcon
 
 from nano_banana.core.images import get_image_provider_capabilities
 from nano_banana.core.images.provider_config import IMAGE_PROVIDER_META
 from nano_banana.desktop.dialogs.image_dialog import ImageGenerationThread
 from nano_banana.desktop.preview import ImagePreviewDialog, ImagePreviewLabel
+from nano_banana.desktop.window_utils import get_last_dir, remember_last_dir
+
+MAX_IMAGE_HISTORY = 10
 
 
 class ImageGenController:
@@ -148,6 +156,21 @@ class ImageGenController:
         canvas_layout.addWidget(self.preview_area)
 
         preview_layout.addWidget(preview_canvas, 1)
+
+        # 历史缩略图条：新结果不再覆盖旧图，点击可回看
+        self.history_list = QListWidget()
+        self.history_list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.history_list.setFlow(QListWidget.Flow.LeftToRight)
+        self.history_list.setWrapping(False)
+        self.history_list.setFixedHeight(76)
+        self.history_list.setIconSize(QSize(56, 56))
+        self.history_list.setSpacing(6)
+        self.history_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.history_list.setToolTip("本次会话的生成历史，点击回看")
+        self.history_list.itemClicked.connect(self._on_history_item_clicked)
+        self.history_list.setVisible(False)
+        preview_layout.addWidget(self.history_list)
+
         layout.addWidget(preview_frame, 1)
 
         # 状态标签
@@ -344,7 +367,8 @@ class ImageGenController:
             self.image_config_status.setStyleSheet("color: #cf1322; font-size: 12px;")
         if hasattr(self, "generate_image_btn"):
             generating = bool(self.worker_thread and self.worker_thread.isRunning())
-            self.generate_image_btn.setEnabled(configured and not generating)
+            # 生成中按钮是「取消生成」，必须保持可点
+            self.generate_image_btn.setEnabled(generating or configured)
 
     def _collect_image_options(self) -> dict:
         """收集当前 provider 的生图参数"""
@@ -365,17 +389,28 @@ class ImageGenController:
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "选择参考图片",
-            "",
+            get_last_dir("reference"),
             "图像文件 (*.png *.jpg *.jpeg *.webp *.bmp)"
         )
         if not files:
             return
+        remember_last_dir(files[0], "reference")
+        self._add_reference_paths(files)
 
+    def _add_reference_paths(self, paths: list):
+        """把图片路径加入参考图（拖拽/粘贴/文件对话框共用入口）。"""
         remaining = 3 - len(self.selected_images)
-        for path in files[:remaining]:
+        if remaining <= 0:
+            self._set_image_status("最多只能选择 3 张参考图", "#faad14")
+            return
+        added = 0
+        for path in paths[:remaining]:
             if path not in self.selected_images:
                 self.selected_images.append(path)
                 self._append_image_item(path)
+                added += 1
+        if added:
+            self._set_image_status(f"已添加 {added} 张参考图", "#52c41a")
 
     def _number_to_chinese(self, num: int) -> str:
         """将数字转换为中文数字"""
@@ -446,10 +481,9 @@ class ImageGenController:
         self.selected_images.clear()
 
     def _on_generate_image_clicked(self):
-        """生成图片按钮点击"""
-        # 先检查是否有任务进行中，如果有则直接返回（此时按钮应该已被禁用）
+        """生成图片按钮点击：生成中再次点击即取消"""
         if self.worker_thread and self.worker_thread.isRunning():
-            QMessageBox.information(self, "提示", "已有任务进行中，请稍候")
+            self._cancel_image_generation()
             return
 
         # 检查是否启用了角色线稿模式
@@ -511,6 +545,8 @@ class ImageGenController:
         self.preview_area.setText("正在生成，请稍候...")
         self.preview_area.clearSourcePixmap()
         self.save_image_btn.setEnabled(False)
+        if hasattr(self, "copy_image_btn"):
+            self.copy_image_btn.setEnabled(False)
         
         # 根据模式显示不同的状态信息
         if self.line_art_mode_enabled.isChecked():
@@ -532,6 +568,27 @@ class ImageGenController:
         self.worker_thread.finished.connect(self._on_thread_finished)
         self.worker_thread.start()
 
+    def _cancel_image_generation(self):
+        """取消当前生图：断开信号后放弃该线程，UI 立即恢复可用。"""
+        thread = self.worker_thread
+        if not thread:
+            return
+        thread.cancel()
+        for signal in (thread.progress, thread.image_ready, thread.error, thread.finished):
+            try:
+                signal.disconnect()
+            except TypeError:
+                pass
+        # 保住引用直到线程自然结束，避免 QThread 运行中被析构
+        self._stale_image_threads = [
+            t for t in getattr(self, "_stale_image_threads", []) if t.isRunning()
+        ]
+        self._stale_image_threads.append(thread)
+        self.worker_thread = None
+        self._set_image_generating_state(False)
+        self.preview_area.setText("已取消生成")
+        self._set_image_status("已取消", "#8c8c8c")
+
     def _on_thread_finished(self):
         """线程完成"""
         self._set_image_generating_state(False)
@@ -542,20 +599,84 @@ class ImageGenController:
         self.generated_image_bytes = image_bytes
         pixmap = QPixmap.fromImage(QImage.fromData(image_bytes))
         self.generated_pixmap = pixmap
+        self._append_to_history(image_bytes, pixmap)
         self._refresh_preview_pixmap()
         self.save_image_btn.setEnabled(True)
+        if hasattr(self, "copy_image_btn"):
+            self.copy_image_btn.setEnabled(True)
         self._set_image_status("生成完成，点击图片可查看大图", "#52c41a")
         # 启用点击预览功能
         self._enable_image_preview(True)
 
+    def _append_to_history(self, image_bytes: bytes, pixmap: QPixmap):
+        """记录生成历史并刷新缩略图条。"""
+        self.image_history.append((image_bytes, pixmap))
+        if len(self.image_history) > MAX_IMAGE_HISTORY:
+            self.image_history.pop(0)
+            self.history_list.takeItem(0)
+        thumbnail = pixmap.scaled(
+            56, 56,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        item = QListWidgetItem(QIcon(thumbnail), "")
+        item.setToolTip(f"第 {len(self.image_history)} 张，点击回看")
+        self.history_list.addItem(item)
+        self.history_list.setCurrentItem(item)
+        self.history_list.scrollToItem(item)
+        self.history_list.setVisible(True)
+
+    def _on_history_item_clicked(self, item: QListWidgetItem):
+        """点击历史缩略图，切换主预览。"""
+        row = self.history_list.row(item)
+        if not (0 <= row < len(self.image_history)):
+            return
+        image_bytes, pixmap = self.image_history[row]
+        self.generated_image_bytes = image_bytes
+        self.generated_pixmap = pixmap
+        self._refresh_preview_pixmap()
+        self.save_image_btn.setEnabled(True)
+        if hasattr(self, "copy_image_btn"):
+            self.copy_image_btn.setEnabled(True)
+        self._enable_image_preview(True)
+        self._set_image_status(f"已切换到历史第 {row + 1} 张", "#595959")
+
+    def _copy_image_to_clipboard(self):
+        """把当前图片复制到剪贴板。"""
+        if not self.generated_pixmap:
+            return
+        QApplication.clipboard().setPixmap(self.generated_pixmap)
+        self._set_image_status("图片已复制到剪贴板", "#52c41a")
+
     def _on_generation_error(self, message: str):
         """生成错误"""
-        self._set_image_status("生成失败，悬停查看错误详情", "#ff4d4f", message)
+        self._set_image_status("生成失败", "#ff4d4f", message)
         self.preview_area.setText("生成失败，请调整参数后重试")
         # 禁用点击预览功能
         self._enable_image_preview(False)
         # 确保在错误时也恢复按钮状态（虽然 _on_thread_finished 也会调用，但这里明确调用更安全）
         self._set_image_generating_state(False)
+        self._show_image_error(message)
+
+    def _show_image_error(self, message: str):
+        """弹窗展示生成错误，支持选中和一键复制。非阻塞，避免卡事件循环。"""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Critical)
+        box.setWindowTitle("图片生成失败")
+        box.setText("图片生成失败，错误详情：")
+        box.setInformativeText(message)
+        box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        copy_btn = box.addButton("复制错误信息", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("关闭", QMessageBox.ButtonRole.RejectRole)
+
+        def _on_clicked(button):
+            if button is copy_btn:
+                QApplication.clipboard().setText(message)
+                self._set_image_status("错误信息已复制到剪贴板", "#8c8c8c", message)
+
+        box.buttonClicked.connect(_on_clicked)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        box.open()
 
     def _set_image_generating_state(self, generating: bool):
         """设置生成状态"""
@@ -568,8 +689,11 @@ class ImageGenController:
         for btn in self.image_buttons:
             btn.setEnabled(not generating)
         if generating:
-            self.generate_image_btn.setEnabled(False)
+            # 生成中按钮变为取消入口，保持可点
+            self.generate_image_btn.setText("取消生成")
+            self.generate_image_btn.setEnabled(True)
         else:
+            self.generate_image_btn.setText("生成图片")
             self._update_image_config_status()
 
     def _save_image(self):
@@ -577,16 +701,17 @@ class ImageGenController:
         if not self.generated_image_bytes:
             return
 
+        default_name = time.strftime("generated_%Y%m%d_%H%M%S.png")
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "另存为",
-            "generated.png",
+            os.path.join(get_last_dir("save"), default_name),
             "PNG 图片 (*.png);;JPEG 图片 (*.jpg *.jpeg)"
         )
         if not file_path:
             return
+        remember_last_dir(file_path, "save")
 
-        import os
         suffix = os.path.splitext(file_path)[1].lower()
         format_name = "PNG" if suffix in ("", ".png") else "JPEG"
         image = QImage.fromData(self.generated_image_bytes)

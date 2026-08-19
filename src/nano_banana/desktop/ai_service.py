@@ -20,23 +20,35 @@ class _ChatStreamThread(QThread):
     stream_chunk = pyqtSignal(str)
     stream_done = pyqtSignal(str)
 
-    def __init__(self, messages: list, config_manager: AIConfigManager):
+    def __init__(self, config_manager: AIConfigManager):
         super().__init__()
-        self.messages = messages
         self.config_manager = config_manager
         self._cancelled = False
 
     def cancel(self):
         self._cancelled = True
 
+    def _build_messages(self) -> list:
+        raise NotImplementedError
+
     def run(self):
         try:
+            # 消息构建包含参考图读盘 + base64 编码，必须留在工作线程里，
+            # 否则大图会卡死 UI。
+            self.progress.emit("正在处理输入...")
+            try:
+                messages = self._build_messages()
+            except ValueError as exc:
+                self.error.emit(str(exc))
+                return
+            if self._cancelled:
+                return
             self.progress.emit("正在连接AI服务...")
             chat = self.config_manager.get_chat_config()
             full_content = ""
             self.progress.emit("正在生成提示词...")
             for event in stream_chat(
-                self.messages,
+                messages,
                 base_url=chat["base_url"],
                 api_key=chat["api_key"],
                 model=chat["model"] or "gpt-4o-mini",
@@ -64,20 +76,12 @@ class AIGenerateThread(_ChatStreamThread):
         config_manager: AIConfigManager,
         image_paths: Optional[List[str]] = None,
     ):
-        try:
-            messages = build_generate_messages(user_prompt, image_paths or [])
-        except ValueError as exc:
-            messages = None
-            self._init_error = str(exc)
-        else:
-            self._init_error = ""
-        super().__init__(messages or [], config_manager)
+        super().__init__(config_manager)
+        self.user_prompt = user_prompt
+        self.image_paths = image_paths or []
 
-    def run(self):
-        if self._init_error:
-            self.error.emit(self._init_error)
-            return
-        super().run()
+    def _build_messages(self) -> list:
+        return build_generate_messages(self.user_prompt, self.image_paths)
 
 
 class AIModifyThread(_ChatStreamThread):
@@ -88,11 +92,13 @@ class AIModifyThread(_ChatStreamThread):
         config_manager: AIConfigManager,
         image_paths: Optional[List[str]] = None,
     ):
-        messages = build_modify_messages(current_data, modify_request, image_paths or [])
-        super().__init__(messages, config_manager)
+        super().__init__(config_manager)
         self.current_data = current_data
         self.modify_request = modify_request
         self.image_paths = image_paths or []
+
+    def _build_messages(self) -> list:
+        return build_modify_messages(self.current_data, self.modify_request, self.image_paths)
 
     def run(self):
         self.progress.emit("正在修改提示词...")
@@ -103,6 +109,8 @@ class AIService:
     def __init__(self):
         self.config_manager = AIConfigManager()
         self._current_thread: Optional[_ChatStreamThread] = None
+        # 已取消但可能还在跑的线程：保住引用防止 QThread 运行中被析构
+        self._stale_threads: List[_ChatStreamThread] = []
 
     def is_configured(self) -> bool:
         return self.config_manager.is_configured()
@@ -147,14 +155,33 @@ class AIService:
         )
 
     def cancel(self):
-        if self._current_thread and self._current_thread.isRunning():
-            self._current_thread.cancel()
-            self._current_thread.wait(1000)
+        """取消当前任务：断开信号后打取消标记，不阻塞主线程等待。"""
+        thread = self._current_thread
+        if thread is None:
+            return
+        self._current_thread = None
+        if thread.isRunning():
+            self._disconnect_all(thread)
+            thread.cancel()
+            self._stale_threads.append(thread)
+
+    @staticmethod
+    def _disconnect_all(thread: _ChatStreamThread):
+        for signal in (
+            thread.finished,
+            thread.error,
+            thread.progress,
+            thread.stream_chunk,
+            thread.stream_done,
+        ):
+            try:
+                signal.disconnect()
+            except TypeError:
+                pass  # 没有连接
 
     def _start_thread(self, thread, on_finished, on_error, on_progress, on_stream_chunk, on_stream_done):
-        if self._current_thread and self._current_thread.isRunning():
-            self._current_thread.cancel()
-            self._current_thread.wait(1000)
+        self.cancel()
+        self._stale_threads = [t for t in self._stale_threads if t.isRunning()]
         thread.finished.connect(on_finished)
         thread.error.connect(on_error)
         if on_progress:

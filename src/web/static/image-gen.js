@@ -322,7 +322,8 @@ function updateImageGenerationAvailability() {
     const ready = Boolean(providerConfig?.is_configured && getActiveImageModel());
 
     renderImageProviderStatus();
-    elements.generateImageBtn.disabled = state.isGenerating || !ready;
+    // 生成中按钮保持可点，作为取消入口
+    elements.generateImageBtn.disabled = state.isGenerating ? false : !ready;
 }
 
 function updateImageConfigVisibility() {
@@ -335,26 +336,86 @@ function updateImageConfigVisibility() {
 // ========================================
 // Image Upload for Reference (Shared)
 // ========================================
-function handleImageUpload(e) {
-    const files = Array.from(e.target.files);
-    files.forEach(file => {
-        if (!file.type.startsWith('image/')) {
-            showToast('请选择图片', 'error');
-            return;
-        }
+
+/**
+ * 把文件加入参考图列表（文件选择/拖拽/粘贴共用入口）。
+ * 同步按剩余名额截断，修复多选时 FileReader 异步竞态导致超限的问题。
+ */
+function addImageFilesToList(files, list, renderFn, maxCount = 3) {
+    const imageFiles = Array.from(files).filter(file => file.type.startsWith('image/'));
+    if (!imageFiles.length) {
+        showToast('请选择图片文件', 'error');
+        return;
+    }
+    const remaining = maxCount - list.length;
+    if (remaining <= 0) {
+        showToast(`最多上传${maxCount}张`, 'warning');
+        return;
+    }
+    if (imageFiles.length > remaining) {
+        showToast(`最多上传${maxCount}张，已忽略多余的 ${imageFiles.length - remaining} 张`, 'warning');
+    }
+    imageFiles.slice(0, remaining).forEach(file => {
         const reader = new FileReader();
-        reader.onload = (evt) => {
-            const data = evt.target.result;
-            if (state.uploadedImages.length >= 3) {
-                showToast('最多上传3张', 'warning');
-                return;
-            }
-            state.uploadedImages.push(data);
-            renderUploadedImages();
+        reader.onload = evt => {
+            list.push(evt.target.result);
+            renderFn();
         };
         reader.readAsDataURL(file);
     });
+}
+
+function handleImageUpload(e) {
+    addImageFilesToList(e.target.files, state.uploadedImages, renderUploadedImages);
     e.target.value = ''; // reset
+}
+
+/**
+ * 拖拽 + 粘贴上传参考图。
+ * 拖到生图面板上传区 / AI 弹窗上传区即可添加；
+ * Ctrl+V 粘贴剪贴板图片：AI 弹窗打开时进弹窗，否则进生图参考图。
+ */
+function initImageUploadExtras() {
+    const bindDropZone = (zone, list, renderFn) => {
+        if (!zone) return;
+        zone.addEventListener('dragover', e => {
+            e.preventDefault();
+            zone.classList.add('is-drag-over');
+        });
+        zone.addEventListener('dragleave', () => zone.classList.remove('is-drag-over'));
+        zone.addEventListener('drop', e => {
+            e.preventDefault();
+            zone.classList.remove('is-drag-over');
+            if (e.dataTransfer?.files?.length) {
+                addImageFilesToList(e.dataTransfer.files, list, renderFn);
+            }
+        });
+    };
+
+    bindDropZone(
+        document.querySelector('.reference-upload'),
+        state.uploadedImages,
+        renderUploadedImages
+    );
+    bindDropZone(
+        document.querySelector('#aiModal .image-upload-area'),
+        aiUploadedImages,
+        renderAiUploadedImages
+    );
+
+    document.addEventListener('paste', e => {
+        const files = Array.from(e.clipboardData?.files || [])
+            .filter(file => file.type.startsWith('image/'));
+        if (!files.length) return;
+        e.preventDefault();
+        if (elements.aiModal.classList.contains('active')) {
+            addImageFilesToList(files, aiUploadedImages, renderAiUploadedImages);
+            showToast('已粘贴到 AI 参考图');
+        } else {
+            addImageFilesToList(files, state.uploadedImages, renderUploadedImages);
+            showToast('已粘贴到生图参考图');
+        }
+    });
 }
 
 function renderUploadedImages() {
@@ -401,6 +462,12 @@ function renderUploadedImages() {
 // Image Generation
 // ========================================
 async function generateImage() {
+    // 生成中再次点击 = 取消
+    if (state.isGenerating) {
+        if (state.imageGenAbortController) state.imageGenAbortController.abort();
+        return;
+    }
+
     // 移动端点击生成后自动关闭侧边栏
     const sidebar = document.getElementById('sidebar');
     const sidebarOverlay = document.getElementById('sidebarOverlay');
@@ -423,6 +490,7 @@ async function generateImage() {
     }
 
     state.isGenerating = true;
+    state.imageGenAbortController = new AbortController();
     updateImageGenerationAvailability();
 
     // 生成中状态：骨架屏 + 实时耗时反馈
@@ -441,7 +509,7 @@ async function generateImage() {
 
     const stopTimer = startElapsedTimer(seconds => {
         elapsedText.innerHTML = `图片生成中 · 已耗时 <strong>${seconds}</strong> 秒`;
-        elements.generateImageBtn.textContent = `⏳ 生成中 ${seconds}s`;
+        elements.generateImageBtn.textContent = `取消生成 · ${seconds}s`;
     });
 
     try {
@@ -454,57 +522,121 @@ async function generateImage() {
                 provider,
                 model,
                 options: collectImageOptions()
-            })
+            }),
+            signal: state.imageGenAbortController.signal
         });
 
-        const data = await response.json();
+        // 网关 502 等场景返回的可能是 HTML，直接 .json() 会抛
+        // "Unexpected token" 这种没有意义的错误
+        let data = null;
+        try {
+            data = await response.json();
+        } catch (parseError) {
+            data = null;
+        }
 
-        if (response.ok && data.image) {
-            state.currentGeneratedImage = data.image;
-
-            // 用 DOM 构建结果，避免把几 MB 的 dataURL 写进 HTML 属性
-            const container = document.createElement('div');
-            container.className = 'generated-result-container';
-            const wrap = document.createElement('div');
-            wrap.className = 'generated-img-wrap';
-            const img = document.createElement('img');
-            img.src = data.image;
-            img.alt = '生成结果';
-            img.className = 'generated-img';
-            img.addEventListener('click', () => openImagePreview(data.image));
-            const hint = document.createElement('div');
-            hint.className = 'img-zoom-hint';
-            hint.textContent = '🔍 点击放大';
-            wrap.appendChild(img);
-            wrap.appendChild(hint);
-            container.appendChild(wrap);
-            elements.resultPreview.replaceChildren(container);
+        if (response.ok && data && data.image) {
+            state.generationHistory.push(data.image);
+            if (state.generationHistory.length > 8) state.generationHistory.shift();
+            renderGenerationResult(data.image);
             showToast('图片生成成功!', 'success');
         } else {
-            throw new Error(data.error || '生成失败');
+            throw new Error(
+                (data && data.error) || `请求失败 (HTTP ${response.status} ${response.statusText})`
+            );
         }
 
     } catch (e) {
-        showToast('生成错误: ' + e.message, 'error');
-        elements.resultPreview.classList.add('has-error');
-        const errorState = document.createElement('div');
-        errorState.className = 'generation-error';
-        errorState.setAttribute('role', 'alert');
-        const title = document.createElement('strong');
-        title.className = 'generation-error-title';
-        title.textContent = '生成失败';
-        const message = document.createElement('p');
-        message.className = 'generation-error-message';
-        message.textContent = e.message;
-        errorState.appendChild(title);
-        errorState.appendChild(message);
-        elements.resultPreview.replaceChildren(errorState);
+        if (e.name === 'AbortError') {
+            if (state.generationHistory.length) {
+                // 取消后回显最近一张历史图
+                renderGenerationResult(state.generationHistory[state.generationHistory.length - 1]);
+            } else {
+                const cancelledState = document.createElement('div');
+                cancelledState.className = 'empty-state';
+                const text = document.createElement('p');
+                text.textContent = '已取消生成';
+                cancelledState.appendChild(text);
+                elements.resultPreview.replaceChildren(cancelledState);
+            }
+            showToast('已取消生成');
+        } else {
+            showToast('生成错误: ' + e.message, 'error');
+            elements.resultPreview.classList.add('has-error');
+            const errorState = document.createElement('div');
+            errorState.className = 'generation-error';
+            errorState.setAttribute('role', 'alert');
+            const title = document.createElement('strong');
+            title.className = 'generation-error-title';
+            title.textContent = '生成失败';
+            const message = document.createElement('p');
+            message.className = 'generation-error-message';
+            message.textContent = e.message;
+            errorState.appendChild(title);
+            errorState.appendChild(message);
+            elements.resultPreview.replaceChildren(errorState);
+        }
     } finally {
         stopTimer();
         state.isGenerating = false;
+        state.imageGenAbortController = null;
         updateImageGenerationAvailability();
         elements.generateImageBtn.innerHTML = genBtnDefaultHtml;
     }
+}
+
+/**
+ * 渲染生成结果：大图 + 下载按钮 + 历史缩略图条。
+ * 用 DOM 构建，避免把几 MB 的 dataURL 写进 HTML 属性。
+ */
+function renderGenerationResult(src) {
+    state.currentGeneratedImage = src;
+    elements.resultPreview.classList.remove('has-error');
+
+    const container = document.createElement('div');
+    container.className = 'generated-result-container';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'generated-img-wrap';
+    const img = document.createElement('img');
+    img.src = src;
+    img.alt = '生成结果';
+    img.className = 'generated-img';
+    img.addEventListener('click', () => openImagePreview(src));
+    const hint = document.createElement('div');
+    hint.className = 'img-zoom-hint';
+    hint.textContent = '🔍 点击放大';
+    wrap.appendChild(img);
+    wrap.appendChild(hint);
+    container.appendChild(wrap);
+
+    const actions = document.createElement('div');
+    actions.className = 'result-actions';
+    const downloadBtn = document.createElement('button');
+    downloadBtn.type = 'button';
+    downloadBtn.className = 'btn btn-secondary btn-sm';
+    downloadBtn.textContent = '下载图片';
+    downloadBtn.addEventListener('click', () => downloadImage(src));
+    actions.appendChild(downloadBtn);
+    container.appendChild(actions);
+
+    if (state.generationHistory.length > 1) {
+        const strip = document.createElement('div');
+        strip.className = 'result-history';
+        strip.setAttribute('aria-label', '生成历史');
+        state.generationHistory.forEach((item, idx) => {
+            const thumb = document.createElement('img');
+            thumb.src = item;
+            thumb.className = 'result-history-thumb' + (item === src ? ' is-active' : '');
+            thumb.alt = `历史结果 ${idx + 1}`;
+            thumb.title = `查看第 ${idx + 1} 张`;
+            thumb.addEventListener('click', () => renderGenerationResult(item));
+            strip.appendChild(thumb);
+        });
+        container.appendChild(strip);
+    }
+
+    elements.resultPreview.replaceChildren(container);
 }
 
 function openImagePreview(src) {

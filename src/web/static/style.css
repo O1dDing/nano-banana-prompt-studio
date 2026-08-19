@@ -227,6 +227,12 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { cursor: no
 .generated-img-wrap { position: relative; }
 .generated-img { width: 100%; max-height: 380px; display: block; object-fit: contain; cursor: zoom-in; }
 .img-zoom-hint { position: absolute; right: 8px; bottom: 8px; padding: 5px 7px; border-radius: 4px; color: #fff; background: rgba(0,0,0,.62); font-size: 10px; }
+.result-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.result-history { display: flex; gap: 6px; margin-top: 8px; overflow-x: auto; padding-bottom: 4px; }
+.result-history-thumb { width: 48px; height: 48px; flex: 0 0 auto; object-fit: cover; border: 2px solid transparent; border-radius: 5px; cursor: pointer; }
+.result-history-thumb.is-active { border-color: var(--accent); }
+.reference-upload.is-drag-over .reference-upload-btn,
+.image-upload-area.is-drag-over { border-color: var(--accent); background: var(--accent-soft); }
 
 .modal { display: none; position: fixed; inset: 0; z-index: 1000; align-items: center; justify-content: center; padding: 20px; background: rgba(20, 22, 26, 0.58); }
 .modal.active { display: flex; }
@@ -328,14 +334,21 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { cursor: no
     .sidebar-toggle-btn span { width: 17px; height: 2px; display: block; background: var(--text); }
     .brand-block { min-width: auto; }
     .brand-copy { display: none; }
-    .project-preset-bar { flex: 1; }
-    .project-preset-bar .select-input { width: 100%; }
-    .header-actions .btn:not(#configBtn) { display: none; }
+    .project-preset-bar { flex: 1; min-width: 0; }
+    .project-preset-bar .select-input { width: 100%; min-width: 0; }
+    /* AI 生成/修改是核心功能，移动端必须保留入口，只做紧凑化 */
+    .header-actions { gap: 4px; }
+    .header-actions .btn { padding-inline: 8px; font-size: 12px; }
 }
 
 @media (max-width: 760px) {
     .app-header { padding: 8px 10px; gap: 8px; }
     .project-preset-bar .icon-text-btn, .project-preset-bar .icon-btn { display: none; }
+    /* 窄屏改用短文案，保证四个按钮排得下 */
+    #aiGenerateOpenBtn, #aiModifyOpenBtn, #resetFormBtn { font-size: 0; padding-inline: 8px; }
+    #aiGenerateOpenBtn::before { content: "AI生成"; font-size: 12px; }
+    #aiModifyOpenBtn::before { content: "AI修改"; font-size: 12px; }
+    #resetFormBtn::before { content: "清空"; font-size: 12px; }
     .main-content { display: block; }
     .editor-workspace { min-height: auto; }
     .editor-heading { min-height: 78px; padding: 13px 14px; }

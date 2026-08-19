@@ -35,7 +35,7 @@
 
         <main class="main-content">
             <section class="editor-workspace">
-                <div class="editor-heading"><div><span class="editor-kicker" id="editorKicker">第 1 组 · 2 项约束</span><h1 id="editorTitle">基础设置</h1><p id="editorDescription">先确定整张图的视觉语言与情绪方向。</p></div><span class="editor-save-state" id="editorSaveState">实时同步</span></div>
+                <div class="editor-heading"><div><span class="editor-kicker" id="editorKicker">第 1 组 · 2 项约束</span><h1 id="editorTitle">基础设置</h1><p id="editorDescription">先确定整张图的视觉语言与情绪方向。</p></div><span class="editor-save-state" id="editorSaveState">自动保存草稿</span></div>
                 <div class="tab-content-container">
                     <div id="tab-presets" class="tab-panel" data-title="预设管理" data-description="加载、保存或删除整套结构化提示词配置。"><div class="preset-manager-panel"><div><span class="panel-eyebrow">整套提示词预设</span><h2>复用完整创作配方</h2><p>整套预设会同时恢复结构字段、反向提示词及高级开关；分类预设只覆盖当前分类。</p></div><div class="preset-manager-controls"><select class="select-input preset-select-mirror"><option value="">选择整套预设...</option></select><button class="btn btn-primary preset-save-mirror" type="button">保存当前为新预设</button><button class="btn btn-danger preset-delete-mirror" type="button">删除所选预设</button></div></div></div>
 
@@ -86,7 +86,7 @@
                         <section class="advanced-section"><div class="switch-heading"><div><strong>角色线稿模式</strong><span>启用后使用专用线稿提示词，并停用其他结构字段。</span></div><label class="switch-control"><input type="checkbox" id="lineArtModeEnabled"><span></span></label></div><div id="lineArtGroup" class="advanced-content" style="display: none;"><textarea id="lineArtPromptInput" class="textarea-input" rows="5"></textarea><div class="align-end"><button id="saveLineArtPromptBtn" class="btn btn-secondary btn-sm" type="button">保存线稿提示词</button></div></div></section>
                     </div></div>
                 </div>
-                <footer class="editor-footer"><button class="btn btn-secondary" id="previousCategoryBtn" type="button">上一组</button><span id="categoryFooterStatus">当前分类的值会自动保存到表单</span><button class="btn btn-primary" id="nextCategoryBtn" type="button">下一组：场景设置</button></footer>
+                <footer class="editor-footer"><button class="btn btn-secondary" id="previousCategoryBtn" type="button">上一组</button><span id="categoryFooterStatus">内容自动保存为本机草稿，刷新页面不会丢失</span><button class="btn btn-primary" id="nextCategoryBtn" type="button">下一组：场景设置</button></footer>
             </section>
 
             <aside class="inspector-panel">

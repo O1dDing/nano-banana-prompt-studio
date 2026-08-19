@@ -163,10 +163,8 @@ class ImagePreviewLayoutTests(unittest.TestCase):
                 splitter_sizes_before[0] * 0.8,
                 f"long status text collapsed splitter: {splitter_sizes_before} -> {splitter_sizes_after}",
             )
-            self.assertEqual(
-                window.image_status_label.text(),
-                "\u751f\u6210\u5931\u8d25\uff0c\u60ac\u505c\u67e5\u770b\u9519\u8bef\u8be6\u60c5",
-            )
+            # 错误详情现在通过非阻塞弹窗展示，状态栏只显示简短文案
+            self.assertEqual(window.image_status_label.text(), "\u751f\u6210\u5931\u8d25")
             self.assertEqual(window.image_status_label.toolTip(), error_message)
             window.close()
 

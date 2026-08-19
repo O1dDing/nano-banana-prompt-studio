@@ -188,10 +188,10 @@
         updateStructurePreview();
         const saveState = document.getElementById('editorSaveState');
         if (saveState) {
-            saveState.textContent = '已同步';
+            saveState.textContent = '草稿已保存';
             window.clearTimeout(refreshStructuredUi.saveTimer);
             refreshStructuredUi.saveTimer = window.setTimeout(() => {
-                saveState.textContent = '实时同步';
+                saveState.textContent = '自动保存草稿';
             }, 700);
         }
     }

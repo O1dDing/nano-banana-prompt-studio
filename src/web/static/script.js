@@ -11,10 +11,69 @@ const state = {
     activeImageModel: '',
     imageSettingsSaveQueue: Promise.resolve(),
     uploadedImages: [], // Base64 strings
-    isGenerating: false
+    isGenerating: false,
+    imageGenAbortController: null,
+    generationHistory: [] // 本次会话生成的图片 dataURL，最新在末尾
 };
 
 const DEFAULT_NEGATIVE_PROMPT = '水印、签名、文字';
+const DRAFT_STORAGE_KEY = 'nano-banana-form-draft';
+
+// ========================================
+// 本机草稿：防刷新/关页丢失表单内容
+// ========================================
+let draftSaveTimer = null;
+
+function saveDraftNow() {
+    try {
+        localStorage.setItem(
+            DRAFT_STORAGE_KEY,
+            JSON.stringify({ savedAt: Date.now(), data: getFormData() })
+        );
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function scheduleDraftSave() {
+    clearTimeout(draftSaveTimer);
+    draftSaveTimer = setTimeout(() => {
+        const ok = saveDraftNow();
+        const saveState = document.getElementById('editorSaveState');
+        if (saveState && !ok) saveState.textContent = '草稿保存失败';
+    }, 500);
+}
+
+function draftHasMeaningfulContent(data) {
+    const walk = (value, path) => {
+        if (typeof value === 'string') {
+            // 默认反向提示词不算用户输入
+            if (path === '反向提示词' && value.trim() === DEFAULT_NEGATIVE_PROMPT) return false;
+            return Boolean(value.trim());
+        }
+        if (Array.isArray(value)) return value.some(item => walk(item, path));
+        if (value && typeof value === 'object') {
+            return Object.entries(value).some(([key, item]) => walk(item, key));
+        }
+        return false;
+    };
+    return walk(data, '');
+}
+
+function restoreDraft() {
+    try {
+        const raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+        if (!raw) return;
+        const draft = JSON.parse(raw);
+        if (!draft || !draft.data || typeof draft.data !== 'object') return;
+        if (!draftHasMeaningfulContent(draft.data)) return;
+        setFormData(draft.data);
+        showToast('已恢复上次编辑的草稿');
+    } catch (e) {
+        console.error('恢复草稿失败', e);
+    }
+}
 
 function categoryPresetConfig() {
     return window.PromptDoc ? window.PromptDoc.categoryPresetConfig() : {};
@@ -373,24 +432,28 @@ function initCategoryPresets() {
 }
 
 function clearForm() {
-    Object.values(elements).forEach(el => {
-        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) {
-            if (!el.id.startsWith('gen') && !el.id.startsWith('config') && el.id !== 'presetSelect') {
-                if (el.type === 'checkbox') {
-                    el.checked = false;
-                    el.dispatchEvent(new Event('change'));
-                } else {
-                    el.value = '';
-                }
-            }
-        }
+    if (!confirm('确定清空所有提示词字段吗？此操作不可撤销。')) return;
+
+    // 只清结构化提示词字段，不碰生图渠道、配置、AI 弹窗等无关控件
+    document.querySelectorAll('.tab-panel .field-control input, .tab-panel .field-control textarea').forEach(el => {
+        el.value = '';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
     });
+
+    elements.specialRequirementEnabled.checked = false;
+    elements.specialRequirementInput.value = '';
+    elements.specialRequirementEnabled.dispatchEvent(new Event('change'));
+
+    elements.lineArtModeEnabled.checked = false;
+    elements.lineArtPromptInput.value = '';
+    elements.lineArtModeEnabled.dispatchEvent(new Event('change'));
+
     elements.negativePromptEnabled.checked = true;
     elements.negativePromptInput.value = DEFAULT_NEGATIVE_PROMPT;
     elements.negativePromptGroup.style.display = 'flex';
 
-
     updateJsonPreview();
+    showToast('已清空提示词字段');
 }
 
 function updateJsonPreview() {
@@ -422,6 +485,7 @@ function updateJsonPreview() {
     }
     
     elements.jsonPreviewText.value = finalOutput;
+    scheduleDraftSave();
 }
 
 
@@ -538,6 +602,7 @@ function init() {
     // Image Upload
     elements.uploadImageBtn.addEventListener('click', () => elements.imageInput.click());
     elements.imageInput.addEventListener('change', handleImageUpload);
+    initImageUploadExtras();
 
     // Form inputs change -> update JSON
     document.querySelectorAll('.app-container input, .app-container textarea').forEach(el => {
@@ -631,6 +696,9 @@ function init() {
         showToast('删除成功');
         loadPresets();
     });
+
+    // 恢复本机草稿（刷新/关页不丢）
+    restoreDraft();
     };
 
     const ready = window.promptSchemaPromise || Promise.resolve();

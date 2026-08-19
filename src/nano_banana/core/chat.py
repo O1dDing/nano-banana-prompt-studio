@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -210,6 +211,22 @@ def _multimodal_user_content(
     if require_any:
         raise ValueError("请提供文字描述或参考图片")
     return text_only
+
+
+def strip_code_fences(content: str) -> str:
+    """剥离 AI 返回内容外层的 ```json / ``` 围栏。
+
+    模型经常在 JSON 前后加 markdown 代码块标记（有时还带语言名或说明文字），
+    直接 json.loads 会失败。
+    """
+    text = (content or "").strip()
+    match = re.search(r"```[ \t]*[\w-]*[ \t]*\r?\n(.*?)\r?\n?[ \t]*```", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    # 只有开头围栏没有闭合（流被截断等情况）
+    text = re.sub(r"^```[ \t]*[\w-]*[ \t]*\r?\n?", "", text)
+    text = re.sub(r"\r?\n?[ \t]*```$", "", text)
+    return text.strip()
 
 
 def _format_chat_error(exc: Exception) -> str:
