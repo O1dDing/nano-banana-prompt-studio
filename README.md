@@ -57,11 +57,12 @@
 ### 3.2 web运行
 
 ```bash
-cd src/web
-pip install -r requirements.txt
-python start.py
+pip install -e ".[web]"
+python -m nano_banana.web.app
+# 或
+python src/web/start.py
 
-#或者docker运行
+# docker
 docker run --rm --name nano-banana-web -p 5000:5000 lissettecarlr/nano-banana-web:v0.4.0
 ```
 
@@ -78,16 +79,13 @@ docker run --rm --name nano-banana-web -p 5000:5000 lissettecarlr/nano-banana-we
 git clone https://github.com/your-username/nano-banana-prompt-studio.git
 cd nano-banana-prompt-studio
 
-# 安装依赖
-pip install -r requirements.txt
-```
+# 安装
+pip install -e ".[desktop]"
 
-#### 运行
-
-```bash
-cd src
-python main.py
-```
+# 运行桌面端
+python src/main.py
+# 或
+python -m nano_banana
 
 #### 打包
 ```bash

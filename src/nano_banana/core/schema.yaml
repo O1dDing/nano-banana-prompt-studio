@@ -1,0 +1,241 @@
+version: 1
+categories:
+  - id: basic
+    label: 基础设置
+    description: 先确定整张图的视觉语言与情绪方向。
+    color_class: basic
+    fields:
+      - id: styleMode
+        label: 风格模式
+        widget_key: 风格模式
+        path: [风格模式]
+        widget: combo
+        options_key: 风格模式
+        example: 高保真二次元插画, 官方立绘风格, 赛璐璐上色
+      - id: atmosphere
+        label: 画面气质
+        widget_key: 画面气质
+        path: [画面气质]
+        widget: combo
+        options_key: 画面气质
+        example: 清透, 治愈, 空灵, 极致可爱, 梦幻
+  - id: scene
+    label: 场景设置
+    description: 约束地点、光线、天气、背景层次与景深。
+    color_class: scene
+    fields:
+      - id: location
+        label: 地点设定
+        widget_key: 地点设定
+        path: [场景, 环境, 地点设定]
+        widget: combo
+        options_key: 地点设定
+        example: 蔚蓝档案风格的木质海边车站，背景是明亮的蓝天和巨大的积雨云
+      - id: lighting
+        label: 光线
+        widget_key: 光线
+        path: [场景, 环境, 光线]
+        widget: combo
+        options_key: 光线
+        example: 高调摄影风格（High-key lighting），明亮的日光，强烈的环境光，没有死黑阴影
+      - id: weather
+        label: 天气氛围
+        widget_key: 天气氛围
+        path: [场景, 环境, 天气氛围]
+        widget: combo
+        options_key: 天气氛围
+        example: 盛夏的晴朗午后，海风吹拂，空气中充满透明感
+      - id: background
+        label: 背景描述
+        widget_key: 背景描述
+        path: [场景, 背景, 描述]
+        widget: combo
+        options_key: 背景描述
+        example: 背景是高饱和度的蓝天、白云和波光粼粼的大海，画面极其干净
+      - id: depth
+        label: 景深
+        widget_key: 景深
+        path: [场景, 背景, 景深]
+        widget: combo
+        options_key: 景深
+        example: 适度的景深虚化，让背景的云朵和大海成为清新的衬托
+  - id: subject
+    label: 主体细节
+    description: 逐项锁定主体外观、表情动作与服装一致性。
+    color_class: subject
+    two_column: true
+    fields:
+      - id: description
+        label: 整体描述
+        widget_key: 整体描述
+        path: [场景, 主体, 整体描述]
+        widget: combo
+        options_key: 整体描述
+        example: 蔚蓝档案的角色小鸟游星野（Takanashi Hoshino），二次元美少女
+      - id: bodyShape
+        label: 身材
+        widget_key: 身材
+        path: [场景, 主体, 外形特征, 身材]
+        widget: combo
+        options_key: 身材
+        example: 娇小可爱，萝莉体型
+      - id: face
+        label: 面部
+        widget_key: 面部
+        path: [场景, 主体, 外形特征, 面部]
+        widget: combo
+        options_key: 面部
+        example: 圆润可爱的脸庞，带着标志性的慵懒神情，异色瞳（左蓝右橙）
+      - id: hair
+        label: 头发
+        widget_key: 头发
+        path: [场景, 主体, 外形特征, 头发]
+        widget: combo
+        options_key: 头发
+        example: 粉色长发，发梢微卷，头顶有标志性的粉色光环（Halo）和呆毛
+      - id: eyes
+        label: 眼睛
+        widget_key: 眼睛
+        path: [场景, 主体, 外形特征, 眼睛]
+        widget: combo
+        options_key: 眼睛
+        example: 如宝石般闪亮通透的异色瞳孔，眼神清澈
+      - id: emotion
+        label: 情绪
+        widget_key: 情绪
+        path: [场景, 主体, 表情与动作, 情绪]
+        widget: combo
+        options_key: 情绪
+        example: 开心，放松，充满好奇
+      - id: action
+        label: 动作
+        widget_key: 动作
+        path: [场景, 主体, 表情与动作, 动作]
+        widget: combo
+        options_key: 动作
+        example: 坐在车站的木质长椅上，双腿悬空轻轻晃动，身体前倾，一只手放在椅子上撑着身体，另一只手在逗弄漂浮的蓝色小鲸鱼玩偶
+      - id: clothing
+        label: 穿着
+        widget_key: 穿着
+        path: [场景, 主体, 服装, 穿着]
+        widget: combo
+        options_key: 穿着
+        example: 严格参考输入图片的蓝白配色国风
+      - id: clothingDetails
+        label: 服装细节
+        widget_key: 服装细节
+        path: [场景, 主体, 服装, 细节]
+        widget: combo
+        options_key: 服装细节
+        example: 丝绸质感的宽大袖子，精致的腰封，飘动的丝带，可爱的绳结装饰
+      - id: accessories
+        label: 配饰
+        widget_key: 配饰
+        path: [场景, 主体, 配饰]
+        widget: combo
+        options_key: 配饰
+        example: 头顶的兔子发饰，漂浮的蓝色鲸鱼玩偶
+  - id: camera
+    label: 相机与构图
+    description: 用摄影语言约束观察位置、主体关系与画面清晰度。
+    color_class: camera
+    fields:
+      - id: angle
+        label: 机位角度
+        widget_key: 机位角度
+        path: [相机, 机位角度]
+        widget: combo
+        options_key: 机位角度
+        example: 微微仰视或平视视角
+      - id: composition
+        label: 构图
+        widget_key: 构图
+        path: [相机, 构图]
+        widget: combo
+        options_key: 构图
+        example: 全身中景，完整显示角色的身体，特别是脚部，强调人物与背景的互动
+      - id: lensCharacteristics
+        label: 镜头特性
+        widget_key: 镜头特性
+        path: [相机, 镜头特性]
+        widget: combo
+        options_key: 镜头特性
+        example: 虚拟35mm镜头感
+      - id: sensorQuality
+        label: 传感器画质
+        widget_key: 传感器画质
+        path: [相机, 传感器画质]
+        widget: combo
+        options_key: 传感器画质
+        example: 8K 超高清分辨率, 矢量级清晰度, 无噪点
+  - id: aesthetic
+    label: 调色与质感
+    description: 控制最终成片的材质表现、色调与后期效果。
+    color_class: aesthetic
+    fields:
+      - id: intent
+        label: 呈现意图
+        widget_key: 呈现意图
+        path: [审美控制, 呈现意图]
+        widget: combo
+        options_key: 呈现意图
+        example: 顶级二次元游戏CG，Pixiv高赞插画，清新的壁纸风格
+      - id: materialRealism
+        label: 材质真实度
+        widget_key: 材质真实度
+        path: [审美控制, 材质真实度]
+        type: string_list
+        widget: combo
+        options_key: 材质真实度
+        example:
+          - 二次元赛璐璐风格的皮肤质感，白皙透红
+          - 头发具有光泽感和丝滑感
+          - 衣物布料呈现清晰的褶皱和飘逸感，非写实材质
+      - id: overallTone
+        label: 整体色调
+        widget_key: 整体色调
+        path: [审美控制, 色彩风格, 整体色调]
+        widget: combo
+        options_key: 整体色调
+        example: 清新的蓝白色调，粉色点缀，高亮度，低对比度
+      - id: contrast
+        label: 对比度
+        widget_key: 对比度
+        path: [审美控制, 色彩风格, 对比度]
+        widget: combo
+        options_key: 对比度
+        example: 柔和的明暗过渡，拒绝油腻的厚涂感，保持画面通透
+      - id: specialEffects
+        label: 后期效果
+        widget_key: 特殊效果
+        path: [审美控制, 色彩风格, 特殊效果]
+        widget: combo
+        options_key: 特殊效果
+        example: 梦幻的粒子浮动，发光的线条
+overlays:
+  - id: negativePrompt
+    label: 反向提示词
+    path: [反向提示词]
+    optional: true
+    default: 水印、签名、文字
+    options_key: 反向提示词标签
+  - id: specialRequirement
+    label: 特别要求
+    path: [特别要求]
+    optional: true
+    ui_only: true
+  - id: lineArt
+    label: 角色线稿生成
+    path: [角色线稿生成]
+    optional: true
+    ui_only: true
+root_order:
+  - 风格模式
+  - 画面气质
+  - 场景
+  - 相机
+  - 审美控制
+  - 画幅设置
+  - 反向提示词
+  - 特别要求
+  - 角色线稿生成

@@ -9,19 +9,15 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 # 确保 Python 输出不被缓冲
 ENV PYTHONUNBUFFERED=1
-# 添加 src 到 PYTHONPATH，确保可以导入 utils 和 components
+# 添加 src 到 PYTHONPATH，安装可编辑包后也可省略
 ENV PYTHONPATH=/app/src
 
-# 复制依赖文件
-COPY src/web/requirements.txt /app/requirements.txt
-
-# 安装依赖
-# 使用阿里云镜像源加速（可选，根据网络环境决定，这里使用默认源但加上 --no-cache-dir）
-RUN pip install --no-cache-dir -r requirements.txt
-
 # 复制项目文件
-# 我们需要复制整个 src 目录，因为 web/app.py 依赖于 src 下的其他模块
+COPY pyproject.toml README.md /app/
 COPY src /app/src
+
+# 安装 Web 依赖（不装 PyQt）
+RUN pip install --no-cache-dir -e ".[web]"
 
 
 # 暴露端口

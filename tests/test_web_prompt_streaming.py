@@ -199,7 +199,15 @@ if (errorMessage !== 'upstream failed') {
             html.index('<script src="/static/sse-parser.js"></script>'),
             html.index('<script src="/static/script.js"></script>'),
         )
-        script = (SRC / "web" / "static" / "script.js").read_text(encoding="utf-8")
+        self.assertLess(
+            html.index('<script src="/static/script.js"></script>'),
+            html.index('<script src="/static/image-gen.js"></script>'),
+        )
+        self.assertLess(
+            html.index('<script src="/static/image-gen.js"></script>'),
+            html.index('<script src="/static/ai-stream.js"></script>'),
+        )
+        script = (SRC / "web" / "static" / "ai-stream.js").read_text(encoding="utf-8")
         stream_handler = script.split("async function handleAiExecute()", 1)[1].split(
             "function handleAiStop()", 1
         )[0]

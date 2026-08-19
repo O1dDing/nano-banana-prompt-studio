@@ -82,7 +82,7 @@ class WebImageGenerationApiTests(unittest.TestCase):
         self.assertIn('id="configDoubaoImageModel"', html)
 
     def test_generation_error_state_wraps_full_message(self):
-        script = (SRC / "web" / "static" / "script.js").read_text(encoding="utf-8")
+        script = (SRC / "web" / "static" / "image-gen.js").read_text(encoding="utf-8")
         styles = (SRC / "web" / "static" / "style.css").read_text(encoding="utf-8")
 
         self.assertIn("errorState.className = 'generation-error';", script)
@@ -148,9 +148,8 @@ class WebImageGenerationApiTests(unittest.TestCase):
             patch.object(
                 web_app.config_manager, "save_image_generation_options", return_value=True
             ),
-            patch.object(
-                web_app,
-                "create_image_provider_from_credentials",
+            patch(
+                "nano_banana.web.blueprints.images.create_image_provider_from_credentials",
                 return_value=image_client,
             ) as create_client,
         ):
@@ -202,9 +201,8 @@ class WebImageGenerationApiTests(unittest.TestCase):
             patch.object(
                 web_app.config_manager, "save_image_generation_options", return_value=True
             ),
-            patch.object(
-                web_app,
-                "create_image_provider_from_credentials",
+            patch(
+                "nano_banana.web.blueprints.images.create_image_provider_from_credentials",
                 return_value=FailingImageClient(),
             ),
         ):

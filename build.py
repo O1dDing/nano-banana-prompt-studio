@@ -76,7 +76,12 @@ def build_exe():
         '--hidden-import=yaml',
         '--hidden-import=pyperclip',
         '--hidden-import=PIL.Image',
-        '--hidden-import=openai',                     # AI 服务
+        '--hidden-import=nano_banana',
+        '--hidden-import=nano_banana.core',
+        '--hidden-import=nano_banana.core.images',
+        '--hidden-import=nano_banana.desktop',
+        '--collect-all=nano_banana',
+        f'--add-data=src/nano_banana/core/schema.yaml{os.pathsep}nano_banana/core',
         '--hidden-import=openai.resources',
         '--hidden-import=openai.resources.chat',
         '--hidden-import=openai.resources.chat.completions',
