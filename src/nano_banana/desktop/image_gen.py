@@ -165,7 +165,8 @@ class ImageGenController:
         container_layout.setSpacing(12)
 
         label = QLabel(label_text)
-        label.setFixedWidth(72)
+        # 最小宽度保证对齐，长文本/大字体时允许自动加宽而不是裁剪
+        label.setMinimumWidth(72)
         label.setStyleSheet("font-size: 12px; color: #595959;")
         container_layout.addWidget(label)
 

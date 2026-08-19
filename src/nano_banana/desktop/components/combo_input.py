@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QInputDialog,
     QMessageBox,
+    QSizePolicy,
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtGui import QAction
@@ -47,12 +48,14 @@ class ComboInput(QWidget):
         self.combo.addItems(self._options)
         self.combo.setCurrentText("")
         self.combo.lineEdit().setPlaceholderText("选择或输入...")
-        self.combo.setMinimumWidth(300)
+        # 最小宽度不宜过大，否则窄屏/拖动分割条时内容被裁切（表单区无横向滚动条）
+        self.combo.setMinimumWidth(200)
         layout.addWidget(self.combo, 1)
 
-        # 管理按钮
+        # 管理按钮：固定宽度，高度跟随行高，字体/DPI变化时自动与输入框对齐
         self.manage_btn = QPushButton("⋯")  # 使用更明显的省略号字符
-        self.manage_btn.setFixedSize(36, 38)  # 与输入框高度对齐 (20 + 8*2 padding + 2 border)
+        self.manage_btn.setFixedWidth(36)
+        self.manage_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.manage_btn.setToolTip("管理选项")
         self.manage_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.manage_btn.setStyleSheet("""

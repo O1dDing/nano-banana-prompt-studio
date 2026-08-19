@@ -62,8 +62,12 @@ python -m nano_banana.web.app
 # 或
 python src/web/start.py
 
-# docker
-docker run --rm --name nano-banana-web -p 5000:5000 lissettecarlr/nano-banana-web:v0.4.0
+# docker：拉现成镜像
+docker run --rm --name nano-banana-web -p 5000:5000 lissettecarlr/nano-banana-web:v0.4.1
+
+# 或在项目根目录本地编译
+docker build -f web_dockerfile -t nano-banana-web:v0.4.1 .
+docker run --rm --name nano-banana-web -p 5000:5000 nano-banana-web:v0.4.1
 ```
 
 ### 3.3 通过代码运行

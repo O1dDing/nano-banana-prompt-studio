@@ -11,9 +11,14 @@ build/
 dist/
 *.egg-info/
 
-# IDE
+# IDE / agent 本地文件
 .vscode/
 .idea/
+.cursor/
+.codex/
+AGENTS.md
+ARCHITECTURE.md
+CONTRIBUTING.md
 *.swp
 *.swo
 

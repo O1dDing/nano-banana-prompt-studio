@@ -78,11 +78,11 @@ def setup_light_palette(app: QApplication):
 
 
 def main():
-    # 高DPI支持
-    if hasattr(Qt, "AA_EnableHighDpiScaling"):
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
-    if hasattr(Qt, "AA_UseHighDpiPixmaps"):
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
+    # 高DPI支持：Qt6 默认启用缩放（AA_EnableHighDpiScaling/AA_UseHighDpiPixmaps 已废弃）。
+    # PassThrough 让 125%/150% 等非整数缩放比例按实际值生效，避免被取整到 100%/200%。
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
 
     app = QApplication(sys.argv)
 

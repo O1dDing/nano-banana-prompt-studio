@@ -30,6 +30,7 @@ from nano_banana.core.images import (
     get_image_provider_capabilities,
     get_provider_label,
 )
+from nano_banana.desktop.window_utils import fit_window_to_screen
 
 
 class ImageGenerationThread(QThread):
@@ -279,7 +280,7 @@ class AIImageGenerateDialog(QDialog):
     def _setup_ui(self):
         self.setWindowTitle("AI 生图")
         self.setModal(True)
-        self.resize(1100, 750)
+        fit_window_to_screen(self, 1100, 750, min_width=900, min_height=620)
         self.setStyleSheet("""
             QDialog {
                 background-color: #f5f7fa;

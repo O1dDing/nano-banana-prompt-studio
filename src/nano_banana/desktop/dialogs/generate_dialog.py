@@ -30,6 +30,7 @@ from nano_banana.core.config import AIConfigManager
 from nano_banana.core.images.provider_config import IMAGE_PROVIDER_META
 from nano_banana.desktop.ai_service import AIService
 from nano_banana.desktop.dialogs.config_dialog import UnifiedAIConfigDialog
+from nano_banana.desktop.window_utils import fit_window_to_screen
 
 
 class AIGenerateDialog(QDialog):
@@ -49,7 +50,7 @@ class AIGenerateDialog(QDialog):
     
     def _setup_ui(self):
         self.setWindowTitle("AI 生成提示词")
-        self.setMinimumSize(1100, 750)
+        fit_window_to_screen(self, 1100, 750, min_width=900, min_height=620)
         self.setModal(True)
         self.setStyleSheet("""
             QDialog {

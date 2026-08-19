@@ -64,7 +64,12 @@ class ImagePreviewDialog(QDialog):
     def _setup_ui(self):
         self.setWindowTitle("图片预览")
         self.setModal(True)
-        self.setMinimumSize(800, 600)
+
+        # 最小尺寸不超过屏幕可用区域，避免小屏/高DPI缩放下窗口被裁切
+        screen = self.screen().availableGeometry()
+        max_width = int(screen.width() * 0.9)
+        max_height = int(screen.height() * 0.9)
+        self.setMinimumSize(min(800, max_width), min(600, max_height))
         
         # 设置样式
         self.setStyleSheet("""
@@ -91,10 +96,6 @@ class ImagePreviewDialog(QDialog):
         self._update_image()
         
         # 设置窗口大小，适应图片但不超过屏幕
-        screen = self.screen().availableGeometry()
-        max_width = int(screen.width() * 0.9)
-        max_height = int(screen.height() * 0.9)
-        
         img_width = self.pixmap.width()
         img_height = self.pixmap.height()
         

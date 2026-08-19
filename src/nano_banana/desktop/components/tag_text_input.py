@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -57,8 +58,10 @@ class TagTextInput(QWidget):
         self.tag_input.returnPressed.connect(self._add_new_tag)
         add_row.addWidget(self.tag_input, 1)
 
+        # 固定宽度，高度跟随行高，字体/DPI变化时自动与输入框对齐
         self.add_tag_btn = QPushButton("+")
-        self.add_tag_btn.setFixedSize(38, 38)
+        self.add_tag_btn.setFixedWidth(38)
+        self.add_tag_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.add_tag_btn.setToolTip("添加标签")
         self.add_tag_btn.setAccessibleName("添加标签")
         self.add_tag_btn.setObjectName("secondaryButton")
@@ -77,7 +80,8 @@ class TagTextInput(QWidget):
         tags_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         tags_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         tags_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        tags_scroll.setFixedHeight(42)
+        # 高度按字体计算，系统字号/DPI变大时标签不被裁剪
+        tags_scroll.setFixedHeight(self.fontMetrics().height() + 24)
         tags_scroll.setWidget(self.tags_widget)
         layout.addWidget(tags_scroll)
 

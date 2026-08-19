@@ -47,6 +47,7 @@ from nano_banana.core.prompt_doc import flatten, nest, order_document, subset
 from nano_banana.core.schema import default_negative_prompt, get_schema
 from nano_banana.desktop.form_panel import add_schema_field_groups
 from nano_banana.desktop.image_gen import ImageGenController
+from nano_banana.desktop.window_utils import fit_window_to_screen
 
 
 DEFAULT_NEGATIVE_PROMPT = default_negative_prompt()
@@ -81,8 +82,8 @@ class PromptGeneratorApp(ImageGenController, QMainWindow):
 
     def _setup_window(self):
         self.setWindowTitle("Nano Banana 生图工具")
-        self.setMinimumSize(1200, 800)
-        self.resize(1400, 900)
+        # 尺寸按屏幕可用区域钳制，小分辨率/高DPI缩放下不会超出屏幕
+        fit_window_to_screen(self, 1400, 900, min_width=1200, min_height=800)
         self.setStyleSheet(LIGHT_THEME)
         
         # 设置窗口图标
@@ -108,6 +109,8 @@ class PromptGeneratorApp(ImageGenController, QMainWindow):
         # 主内容区域 - 使用分割器（三列布局）
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.main_splitter.setHandleWidth(8)
+        # 禁止把面板拖成 0 宽导致内容"消失"
+        self.main_splitter.setChildrenCollapsible(False)
 
         # 左侧：表单区域
         form_area = self._create_form_area()
@@ -120,6 +123,11 @@ class PromptGeneratorApp(ImageGenController, QMainWindow):
         # 右侧：生图区域
         image_generate_area = self._create_image_generate_area()
         self.main_splitter.addWidget(image_generate_area)
+
+        # 窗口拉伸时三列按比例分配多余空间
+        self.main_splitter.setStretchFactor(0, 1)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setStretchFactor(2, 1)
 
         # 设置分割比例，默认隐藏中间列
         self.main_splitter.setSizes([600, 0, 600])
@@ -547,13 +555,15 @@ class PromptGeneratorApp(ImageGenController, QMainWindow):
         else:
             self.json_toggle_btn.setText("JSON浏览")
         
-        # 调整分割器大小
+        # 按当前分割器实际宽度按比例分配，而不是写死像素值
+        total = max(self.main_splitter.width(), 1)
         if self.json_preview_visible:
-            # 显示时，平均分配三列
-            self.main_splitter.setSizes([500, 300, 500])
+            left = int(total * 0.38)
+            middle = int(total * 0.24)
+            self.main_splitter.setSizes([left, middle, total - left - middle])
         else:
-            # 隐藏时，左右两列平分
-            self.main_splitter.setSizes([600, 0, 600])
+            half = total // 2
+            self.main_splitter.setSizes([half, 0, total - half])
 
     def _create_button_bar(self) -> QWidget:
         bar = QWidget()
