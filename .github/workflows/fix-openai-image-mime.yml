@@ -104,3 +104,5 @@ jobs:
           git add src/components/image_clients.py
           git commit -m 'fix(images): 显式传递参考图 MIME 类型'
           git push origin HEAD:main
+
+# trigger-v2
