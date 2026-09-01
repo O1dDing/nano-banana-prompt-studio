@@ -1,27 +1,25 @@
 # 使用 Python 3.10 slim 版本作为基础镜像
 FROM python:3.10-slim
 
-# 设置工作目录
 WORKDIR /app
 
-# 设置环境变量
-# 防止 Python 生成 .pyc 文件
-ENV PYTHONDONTWRITEBYTECODE=1
-# 确保 Python 输出不被缓冲
-ENV PYTHONUNBUFFERED=1
-# 添加 src 到 PYTHONPATH，安装可编辑包后也可省略
-ENV PYTHONPATH=/app/src
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/src \
+    IMAGE_TASK_WORKERS=4 \
+    IMAGE_TASK_MAX_PENDING=32 \
+    IMAGE_TASK_TTL_SECONDS=1800 \
+    WEB_THREADS=8 \
+    WEB_TIMEOUT=120
 
-# 复制项目文件
 COPY pyproject.toml README.md /app/
 COPY src /app/src
 
-# 安装 Web 依赖（不装 PyQt）
+# 安装 Web 依赖（不安装 PyQt）
 RUN pip install --no-cache-dir -e ".[web]"
 
-
-# 暴露端口
 EXPOSE 5000
 
-# 启动命令
-CMD ["python", "src/web/app.py"]
+# 生图任务表位于进程内：固定 1 个 Gunicorn worker 保证所有轮询命中同一任务表；
+# HTTP 并发由线程处理，真正的图片 API 并发由 IMAGE_TASK_WORKERS 控制。
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:5000 --workers 1 --threads ${WEB_THREADS} --timeout ${WEB_TIMEOUT} --access-logfile - --error-logfile - nano_banana.web.app:app"]
