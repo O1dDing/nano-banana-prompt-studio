@@ -177,6 +177,57 @@ class AIConfigManagerTests(unittest.TestCase):
         self.assertEqual(options["output_format"]["values"], ["png", "jpeg"])
         self.assertEqual(options["watermark"]["default"], "false")
 
+    def test_capabilities_live_on_provider_classes(self):
+        from nano_banana.core.images.doubao import DoubaoImageProvider
+        from nano_banana.core.images.qwen import QwenImageProvider
+
+        self.assertNotIn("watermark", QwenImageProvider.CAPABILITIES["options"])
+        self.assertEqual(
+            DoubaoImageProvider.CAPABILITIES["options"]["image_size"]["values"],
+            ["1K", "1.5K", "2K"],
+        )
+
+    def test_nested_yaml_is_flattened_on_load_and_rewritten_nested(self):
+        self._write(
+            {
+                "chat": {
+                    "base_url": "https://chat.example/v1",
+                    "api_key": "chat-key",
+                    "model": "chat-model",
+                },
+                "image": {
+                    "active": "gemini",
+                    "providers": {
+                        "gemini": {
+                            "base_url": "https://gemini.example",
+                            "api_key": "gemini-key",
+                            "model": "gemini-model",
+                        }
+                    },
+                    "options": {
+                        "gemini": {"gemini-model": {"aspect_ratio": "16:9"}}
+                    },
+                },
+            }
+        )
+        self.assertEqual(self.manager.get_chat_config()["api_key"], "chat-key")
+        self.assertEqual(
+            self.manager.get_image_provider_config("gemini")["api_key"],
+            "gemini-key",
+        )
+        self.assertEqual(
+            self.manager.get_image_generation_options("gemini", "gemini-model")[
+                "aspect_ratio"
+            ],
+            "16:9",
+        )
+        self.manager.save_config({"model": "new-chat-model"})
+        written = yaml.safe_load(self.manager.config_path.read_text(encoding="utf-8"))
+        self.assertIn("chat", written)
+        self.assertIn("image", written)
+        self.assertEqual(written["chat"]["model"], "new-chat-model")
+        self.assertEqual(written["chat"]["api_key"], "chat-key")
+
 
 if __name__ == "__main__":
     unittest.main()

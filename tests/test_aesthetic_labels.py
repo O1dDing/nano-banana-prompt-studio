@@ -1,13 +1,17 @@
 from pathlib import Path
 
+from nano_banana.core.schema import get_schema
+
 
 def test_aesthetic_controls_use_precise_display_labels_with_compatible_keys():
-    root = Path(__file__).parents[1]
-    desktop = (root / "src" / "app.py").read_text(encoding="utf-8")
-    web = (root / "src" / "web" / "static" / "index.html").read_text(encoding="utf-8")
-    assert 'FieldGroup("调色与质感", color_class="aesthetic")' in desktop
-    assert '_add_field(aesthetic_group, "后期效果", "特殊效果")' in desktop
-    assert '_add_category_preset_controls(aesthetic_group, "aesthetic", "调色与质感")' in desktop
+    field = get_schema().get_field("specialEffects")
+    assert field.label == "后期效果"
+    assert field.widget_key == "特殊效果"
+    assert get_schema().get_category("aesthetic").label == "调色与质感"
+
+    web = (Path(__file__).parents[1] / "src" / "web" / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
     assert 'data-tab="aesthetic"' in web
     assert 'data-preset-label="调色与质感"' in web
     assert '<label for="specialEffects">后期效果' in web

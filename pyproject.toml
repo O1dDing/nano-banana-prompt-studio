@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nano-banana-studio"
+version = "1.0.0"
+description = "结构化 AI 绘画提示词编辑器 + 多渠道生图工作台"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0.1",
+    "openai>=1.40.0,<2.0.0",
+    "Pillow>=10.0.0",
+    "loguru>=0.7.0",
+    "google-genai>=0.3.0",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+desktop = [
+    "PyQt6>=6.6.0",
+    "pyperclip>=1.8.2",
+]
+web = [
+    "flask==3.0.0",
+    "flask-cors==4.0.0",
+    "gunicorn>=22.0.0,<24.0.0",
+]
+dev = [
+    "pytest>=7.0.0",
+]
+build = [
+    "pyinstaller",
+]
+
+[project.scripts]
+nano-banana-web = "nano_banana.web.app:main"
+
+[project.gui-scripts]
+nano-banana = "nano_banana.desktop.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["nano_banana*"]
+
+[tool.setuptools.package-data]
+nano_banana = ["core/schema.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+norecursedirs = [".git", ".pytest_cache", "build", "dist", "output"]

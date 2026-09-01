@@ -5,106 +5,171 @@
 <h1 align="center">Nano Banana Studio · O1dDing Fork</h1>
 
 <p align="center">
-  <strong>结构化提示词 + 多渠道生图，并增强第一阶段联网检索与 Cloudflare 部署稳定性。</strong>
+  <strong>结构化提示词、多渠道生图、第一阶段联网检索，以及适合 Cloudflare 自托管的异步任务队列。</strong>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/OpenAI%20Images-gpt--image--2-412991?logo=openai&logoColor=white" alt="OpenAI Images" />
   <img src="https://img.shields.io/badge/Gemini-Image-4285F4?logo=googlegemini&logoColor=white" alt="Gemini" />
-  <img src="https://img.shields.io/badge/Docker-Web-2496ED?logo=docker&logoColor=white" alt="Docker" />
+  <img src="https://img.shields.io/badge/Docker-Gunicorn-2496ED?logo=docker&logoColor=white" alt="Docker" />
   <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License" />
 </p>
 
-> 本仓库是 [lissettecarlr/nano-banana-prompt-studio](https://github.com/lissettecarlr/nano-banana-prompt-studio) 的 Fork。保留原项目的 MIT License、原有桌面端/Web 端功能与图片生成渠道，并针对 Web 自托管场景加入下述增强。
+> 本仓库基于 [lissettecarlr/nano-banana-prompt-studio](https://github.com/lissettecarlr/nano-banana-prompt-studio) 维护。当前已同步上游至 `ad47e6a`（2026-08-19），保留其新包结构、拖拽/粘贴参考图、生图历史、取消操作、草稿自动保存和 JSON 围栏清理等更新。
 
-## 本 Fork 的主要改动
+## 本 Fork 的增强
 
-### 1. 第一阶段：提示词生成 / 修改增加联网三档开关
+### 1. Prompt → JSON 第一阶段联网三档开关
 
-在“提示词生成模型”配置中增加：
+设置页新增：
 
-- **禁止联网（disabled）**：完全按原项目方式调用，不主动使用搜索工具。
-- **自动联网（auto）**：向支持联网的模型开放搜索工具，由模型自行判断是否需要检索；若第三方兼容网关不支持搜索，则自动回退普通调用，保证兼容性。
-- **强制联网（force）**：要求本次第一阶段必须执行联网搜索；若当前模型或网关不支持，则明确返回错误，不静默降级。
+- **禁止联网**：完全沿用普通 Chat Completions。
+- **自动联网**：向模型开放搜索能力；不支持搜索的第三方中转自动回退普通调用。
+- **强制联网**：必须执行可确认的搜索；模型或网关不支持时明确报错。
 
-第一阶段指：
+联网协议按供应商分别适配，而不是给所有 API 强塞同一个参数：
 
-```text
-用户自然语言 / 参考图
-        ↓
-提示词生成或修改模型
-        ↓
-结构化 JSON Prompt
-```
-
-联网适配按不同 API 能力分别处理，而不是简单给所有模型强塞同一个参数：
-
-| API / Provider | 联网方式 |
+| 第一阶段 API | 搜索方式 |
 |---|---|
-| OpenAI / 支持 Responses API 的兼容服务 | `Responses API + web_search` |
-| xAI / Grok 等兼容 Responses API 的服务 | `web_search` |
-| Gemini 官方接口 | `google_search` |
+| OpenAI / xAI / 火山方舟及兼容 Responses 的中转 | `Responses API + web_search` |
+| Gemini 官方接口 | Interactions API `google_search` |
 | Anthropic Claude 官方接口 | Anthropic Web Search Tool |
 | 阿里云百炼 / Qwen | `enable_search` / `forced_search` |
-| 其他中转站 | 尝试兼容联网；`auto` 失败回退，`force` 失败报错 |
+| 其他中转 | `auto` 失败回退；`force` 失败报错 |
 
-> 第二阶段图片生成逻辑不使用这一开关；图片模型只接收最终结构化 Prompt 和可选参考图。
+该开关只影响提示词生成和修改，不会让第二阶段图片模型自行搜索网页。
 
-### 2. 第二阶段：图片生成异步化，规避 Cloudflare 524
+### 2. 异步生图，规避 Cloudflare 524
 
-原 Web 版在 `/api/generate-image` 内同步等待图片模型完成。高分辨率或繁忙时生成时间可能超过 Cloudflare 的代理等待窗口，表现为 **524 Timeout**。
-
-本 Fork 改为：
+原同步请求需要浏览器和 Cloudflare 一直等待第三方图片 API。现在改为：
 
 ```text
-浏览器提交图片生成
+POST /api/generate-image
+        ↓ 立即返回 HTTP 202 + task_id
+线程池后台调用图片模型
         ↓
-服务器立即返回 task_id（HTTP 202）
+GET /api/generate-image/status/<task_id>
         ↓
-ThreadPoolExecutor 后台执行图片生成
-        ↓
-浏览器轮询 /api/generate-image/status/<task_id>
-        ↓
-完成后返回图片
+completed / failed / cancelled
 ```
 
-同时增加：
-
-- 后台任务状态：`queued / processing / completed / failed`
-- 任务 TTL 清理，避免 Base64 图片长期占用内存
-- 可通过环境变量调整并发与任务保留时间
-- 前端对 HTML/代理错误响应给出可读错误，不再只出现 `Unexpected token '<'`
-
-默认环境变量：
+同时提供：
 
 ```text
-IMAGE_TASK_MAX_WORKERS=2
+POST /api/generate-image/cancel/<task_id>
+GET  /api/generate-image/capacity
+```
+
+前端保留上游新增的拖拽、粘贴、生图历史与取消按钮，但取消操作现在会同时停止本页轮询并向服务器发送任务取消标记。已发往第三方模型的 HTTP 请求不一定能被远端中止；这时本服务会丢弃返回结果并把任务标为已取消。
+
+### 3. OpenAI Images 参考图 MIME 修复
+
+上传参考图时按图片实际内容识别 JPEG、PNG 或 WebP，并显式传递 multipart MIME，避免 WebP 被错误发送为：
+
+```text
+application/octet-stream
+```
+
+### 4. 多标签页并发生图
+
+Docker 默认配置：
+
+```text
+IMAGE_TASK_WORKERS=4
+IMAGE_TASK_MAX_PENDING=32
 IMAGE_TASK_TTL_SECONDS=1800
+WEB_THREADS=8
 ```
 
-> 当前任务表保存在 Python 进程内存中，因此 Web 生产运行时应保持**单 Python 进程**；线程并发由 `IMAGE_TASK_MAX_WORKERS` 控制。
+因此同一 Web 服务可以同时打开多个页面或标签页：默认最多 **4 个图片任务真正并行**，更多任务进入队列，最多保留 32 个未完成任务。每个页面使用独立 `task_id`，互不覆盖。
 
-## 原项目主要功能
+任务表目前保存在 Python 进程内，所以 Docker 固定使用 **1 个 Gunicorn worker + 多线程**。不要直接把 Gunicorn worker 数调到 2 以上；需要多进程或多机器横向扩展时，应先把任务状态迁移到 Redis 等共享存储。
 
-- 可视化编辑结构化提示词
-- AI 一句话生成完整结构化提示词
-- AI 修改现有结构化提示词
-- 参考图片输入
-- 预设保存 / 加载 / 删除
-- JSON 一键复制
-- 多渠道图片生成：
-  - Gemini
-  - OpenAI Images（`gpt-image-2`）
-  - 千问图像
-  - 豆包 Seedream
+## 上游保留功能
 
-## 同步
+- 新的 `nano_banana` 包结构，拆分 `core / desktop / web`
+- 结构化字段与 JSON 实时编辑
+- AI 生成和修改提示词
+- 参考图文件选择、拖拽与剪贴板粘贴
+- 自动恢复本机草稿
+- 本次会话生图历史与缩略图切换
+- 预设管理、字段选项与 JSON 复制
+- Gemini、OpenAI Images、千问图像、豆包 Seedream
+- 桌面端与 Web 端
 
-本仓库以原项目为基础维护增强功能。上游项目：
+## Debian 12 / Docker 部署
+
+```bash
+git clone https://github.com/O1dDing/nano-banana-prompt-studio.git
+cd nano-banana-prompt-studio
+
+docker build --pull -f web_dockerfile -t nano-banana-web:o1dding .
+
+docker run -d \
+  --name nano-banana-web \
+  --restart unless-stopped \
+  -p 5000:5000 \
+  -e IMAGE_TASK_WORKERS=4 \
+  -e IMAGE_TASK_MAX_PENDING=32 \
+  -e IMAGE_TASK_TTL_SECONDS=1800 \
+  nano-banana-web:o1dding
+```
+
+访问：
+
+```text
+http://服务器IP:5000
+```
+
+### 源码方式
+
+```bash
+pip install -e ".[web]"
+nano-banana-web
+```
+
+桌面端：
+
+```bash
+pip install -e ".[desktop]"
+python -m nano_banana
+```
+
+## 更新已有 Docker 部署
+
+先备份 `src/config/ai_config.yaml`，然后：
+
+```bash
+cd /opt/nano-banana-prompt-studio
+git fetch origin
+git checkout main
+git reset --hard origin/main
+
+docker build --no-cache -f web_dockerfile -t nano-banana-web:o1dding .
+docker rm -f nano-banana-web
+
+docker run -d \
+  --name nano-banana-web \
+  --restart unless-stopped \
+  -p 5000:5000 \
+  nano-banana-web:o1dding
+```
+
+## 同步关系
+
+上游项目：
 
 - [lissettecarlr/nano-banana-prompt-studio](https://github.com/lissettecarlr/nano-banana-prompt-studio)
 
+本 Fork 已将定制功能迁移到上游新的包结构中：
+
+- 第一阶段联网：`src/nano_banana/core/web_search.py`
+- Web 提示词接口：`src/nano_banana/web/blueprints/chat.py`
+- 异步任务：`src/nano_banana/web/image_tasks.py`
+- 图片接口：`src/nano_banana/web/blueprints/images.py`
+- OpenAI MIME 修复：`src/nano_banana/core/images/openai_images.py`
+
 ## License
 
-沿用上游项目的 **MIT License**。原项目及原作者版权声明保持不变。
+沿用上游项目的 **MIT License**，保留原作者版权与许可声明。

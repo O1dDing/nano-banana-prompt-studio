@@ -1,59 +1,36 @@
 (() => {
     'use strict';
 
-    const categoryOrder = ['basic', 'scene', 'subject', 'camera', 'aesthetic'];
-    const categoryLabels = {
+    let categoryOrder = ['basic', 'scene', 'subject', 'camera', 'aesthetic'];
+    let categoryLabels = {
         basic: '基础设置',
         scene: '场景设置',
         subject: '主体细节',
         camera: '相机与构图',
         aesthetic: '调色与质感'
     };
-    const categoryFields = {
-        basic: ['styleMode', 'atmosphere'],
-        scene: ['location', 'lighting', 'weather', 'background', 'depth'],
-        subject: ['description', 'bodyShape', 'face', 'hair', 'eyes', 'emotion', 'action', 'clothing', 'clothingDetails', 'accessories'],
-        camera: ['angle', 'composition', 'lensCharacteristics', 'sensorQuality'],
-        aesthetic: ['intent', 'materialRealism', 'overallTone', 'contrast', 'specialEffects']
-    };
-    const previewPaths = {
-        basic: [
-            ['风格模式', ['风格模式']],
-            ['画面气质', ['画面气质']]
-        ],
-        scene: [
-            ['地点设定', ['场景', '环境', '地点设定']],
-            ['光线', ['场景', '环境', '光线']],
-            ['天气氛围', ['场景', '环境', '天气氛围']],
-            ['背景描述', ['场景', '背景', '描述']],
-            ['景深', ['场景', '背景', '景深']]
-        ],
-        subject: [
-            ['整体描述', ['场景', '主体', '整体描述']],
-            ['身材', ['场景', '主体', '外形特征', '身材']],
-            ['面部', ['场景', '主体', '外形特征', '面部']],
-            ['头发', ['场景', '主体', '外形特征', '头发']],
-            ['眼睛', ['场景', '主体', '外形特征', '眼睛']],
-            ['情绪', ['场景', '主体', '表情与动作', '情绪']],
-            ['动作', ['场景', '主体', '表情与动作', '动作']],
-            ['穿着', ['场景', '主体', '服装', '穿着']],
-            ['服装细节', ['场景', '主体', '服装', '细节']],
-            ['配饰', ['场景', '主体', '配饰']]
-        ],
-        camera: [
-            ['机位角度', ['相机', '机位角度']],
-            ['构图', ['相机', '构图']],
-            ['镜头特性', ['相机', '镜头特性']],
-            ['传感器画质', ['相机', '传感器画质']]
-        ],
-        aesthetic: [
-            ['呈现意图', ['审美控制', '呈现意图']],
-            ['材质真实度', ['审美控制', '材质真实度']],
-            ['整体色调', ['审美控制', '色彩风格', '整体色调']],
-            ['对比度', ['审美控制', '色彩风格', '对比度']],
-            ['后期效果', ['审美控制', '色彩风格', '特殊效果']]
-        ]
-    };
+    let categoryFields = {};
+    let previewPaths = {};
+
+    function hydrateFromSchema(schema) {
+        if (!schema || !schema.categories) return;
+        categoryOrder = schema.categories.map(category => category.id);
+        categoryLabels = Object.fromEntries(
+            schema.categories.map(category => [category.id, category.label])
+        );
+        categoryFields = Object.fromEntries(
+            schema.categories.map(category => [
+                category.id,
+                category.fields.map(field => field.id),
+            ])
+        );
+        previewPaths = Object.fromEntries(
+            schema.categories.map(category => [
+                category.id,
+                category.fields.map(field => [field.label, field.path]),
+            ])
+        );
+    }
 
     let activeTab = 'basic';
     let activeInspector = 'structure';
@@ -211,10 +188,10 @@
         updateStructurePreview();
         const saveState = document.getElementById('editorSaveState');
         if (saveState) {
-            saveState.textContent = '已同步';
+            saveState.textContent = '草稿已保存';
             window.clearTimeout(refreshStructuredUi.saveTimer);
             refreshStructuredUi.saveTimer = window.setTimeout(() => {
-                saveState.textContent = '实时同步';
+                saveState.textContent = '自动保存草稿';
             }, 700);
         }
     }
@@ -503,22 +480,27 @@
     }
 
     function init() {
-        if (typeof window.setFormData === 'function') {
-            const applyFormData = window.setFormData;
-            window.setFormData = data => {
-                applyFormData(data);
-                window.requestAnimationFrame(refreshStructuredUi);
-            };
-        }
-        initNavigation();
-        initInspector();
-        initFieldOptions();
-        initPresetMirrors();
-        initLiveRefresh();
-        initResultSwitching();
-        selectTab('basic');
-        if (typeof updateJsonPreview === 'function') updateJsonPreview();
-        window.setTimeout(refreshStructuredUi, 0);
+        const start = () => {
+            hydrateFromSchema(window.PROMPT_SCHEMA);
+            if (typeof window.setFormData === 'function') {
+                const applyFormData = window.setFormData;
+                window.setFormData = data => {
+                    applyFormData(data);
+                    window.requestAnimationFrame(refreshStructuredUi);
+                };
+            }
+            initNavigation();
+            initInspector();
+            initFieldOptions();
+            initPresetMirrors();
+            initLiveRefresh();
+            initResultSwitching();
+            selectTab('basic');
+            if (typeof updateJsonPreview === 'function') updateJsonPreview();
+            window.setTimeout(refreshStructuredUi, 0);
+        };
+        const ready = window.promptSchemaPromise || Promise.resolve();
+        ready.then(start).catch(error => console.error(error));
     }
 
     if (document.readyState === 'loading') {

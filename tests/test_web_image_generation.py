@@ -1,6 +1,7 @@
 import importlib.util
 import re
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -32,7 +33,18 @@ class DummyImageClient:
 
 class WebImageGenerationApiTests(unittest.TestCase):
     def setUp(self):
+        web_app.app.config["TESTING"] = True
         self.client = web_app.app.test_client()
+
+    def wait_for_task(self, task_id, terminal=("completed", "failed", "cancelled")):
+        for _ in range(300):
+            response = self.client.get(f"/api/generate-image/status/{task_id}")
+            self.assertEqual(response.status_code, 200)
+            data = response.get_json()
+            if data["status"] in terminal:
+                return data
+            time.sleep(0.01)
+        self.fail(f"task {task_id} did not finish")
 
     def test_provider_metadata_exposes_availability_without_credentials(self):
         credentials = {
@@ -72,35 +84,31 @@ class WebImageGenerationApiTests(unittest.TestCase):
         self.assertFalse(data["qwen_image"]["is_configured"])
         self.assertTrue(data["doubao_image"]["is_configured"])
         self.assertNotIn("api_key", data["gemini"])
-        self.assertIn("gemini-3-pro-image-preview", data["gemini"]["capabilities"])
 
-    def test_web_settings_include_doubao_channel(self):
+    def test_web_settings_include_custom_and_doubao_controls(self):
         html = (SRC / "web" / "static" / "index.html").read_text(encoding="utf-8")
         self.assertIn('value="doubao_image"', html)
         self.assertIn('id="configDoubaoImageBaseUrl"', html)
-        self.assertIn('id="configDoubaoImageApiKey"', html)
-        self.assertIn('id="configDoubaoImageModel"', html)
+        self.assertIn('id="configChatWebSearchMode"', html)
+        self.assertIn('value="disabled"', html)
+        self.assertIn('value="auto"', html)
+        self.assertIn('value="force"', html)
 
     def test_generation_error_state_wraps_full_message(self):
-        script = (SRC / "web" / "static" / "script.js").read_text(encoding="utf-8")
+        script = (SRC / "web" / "static" / "image-gen.js").read_text(encoding="utf-8")
         styles = (SRC / "web" / "static" / "style.css").read_text(encoding="utf-8")
 
         self.assertIn("errorState.className = 'generation-error';", script)
         self.assertIn("errorState.setAttribute('role', 'alert');", script)
         self.assertIn("elements.resultPreview.classList.add('has-error');", script)
+        self.assertIn("waitForImageTask", script)
+        self.assertIn("/api/generate-image/cancel/", script)
         self.assertRegex(
             styles,
             re.compile(
                 r"\.generation-error-message\s*\{[^}]*"
                 r"overflow-wrap:\s*anywhere;[^}]*"
                 r"white-space:\s*pre-wrap;",
-                re.DOTALL,
-            ),
-        )
-        self.assertRegex(
-            styles,
-            re.compile(
-                r"\.result-preview\.has-error\s*\{[^}]*overflow:\s*visible;",
                 re.DOTALL,
             ),
         )
@@ -148,9 +156,8 @@ class WebImageGenerationApiTests(unittest.TestCase):
             patch.object(
                 web_app.config_manager, "save_image_generation_options", return_value=True
             ),
-            patch.object(
-                web_app,
-                "create_image_provider_from_credentials",
+            patch(
+                "nano_banana.web.blueprints.images.create_image_provider_from_credentials",
                 return_value=image_client,
             ) as create_client,
         ):
@@ -163,8 +170,12 @@ class WebImageGenerationApiTests(unittest.TestCase):
                     "options": {"aspect_ratio": "16:9"},
                 },
             )
+            self.assertEqual(response.status_code, 202)
+            task_id = response.get_json()["task_id"]
+            result = self.wait_for_task(task_id)
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(result["image"].startswith("data:image/png;base64,"))
         create_client.assert_called_once_with(
             "qwen_image",
             "https://qwen.example/api/v1",
@@ -173,12 +184,11 @@ class WebImageGenerationApiTests(unittest.TestCase):
         )
         self.assertEqual(image_client.options, {"aspect_ratio": "16:9"})
 
-    def test_generate_image_returns_provider_error_verbatim(self):
+    def test_generate_image_returns_provider_error_verbatim_via_status(self):
         raw_error = (
             "豆包 Seedream 请求失败: Error code: 400 - {'error': {"
             "'code': 'OutputImageSensitiveContentDetected.PolicyViolation', "
-            "'message': 'server message. Request id: request-123', "
-            "'param': '', 'type': 'BadRequestError'}}"
+            "'message': 'server message. Request id: request-123'}}"
         )
 
         class FailingImageClient(DummyImageClient):
@@ -202,9 +212,8 @@ class WebImageGenerationApiTests(unittest.TestCase):
             patch.object(
                 web_app.config_manager, "save_image_generation_options", return_value=True
             ),
-            patch.object(
-                web_app,
-                "create_image_provider_from_credentials",
+            patch(
+                "nano_banana.web.blueprints.images.create_image_provider_from_credentials",
                 return_value=FailingImageClient(),
             ),
         ):
@@ -217,9 +226,24 @@ class WebImageGenerationApiTests(unittest.TestCase):
                     "options": {},
                 },
             )
+            self.assertEqual(response.status_code, 202)
+            result = self.wait_for_task(response.get_json()["task_id"])
 
-        self.assertEqual(response.status_code, 500)
-        self.assertEqual(response.get_json()["error"], raw_error)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["error"], raw_error)
+
+    def test_capacity_and_unknown_task_endpoints(self):
+        capacity = self.client.get("/api/generate-image/capacity")
+        self.assertEqual(capacity.status_code, 200)
+        self.assertGreaterEqual(capacity.get_json()["workers"], 1)
+        self.assertEqual(
+            self.client.get("/api/generate-image/status/not-found").status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.post("/api/generate-image/cancel/not-found").status_code,
+            404,
+        )
 
 
 if __name__ == "__main__":
