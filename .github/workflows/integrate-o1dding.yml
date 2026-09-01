@@ -1,0 +1,447 @@
+name: Integrate O1dDing enhancements after upstream refactor
+
+on:
+  push:
+    branches:
+      - sync/upstream-2026-08-19
+    paths:
+      - '.github/workflows/integrate-o1dding.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Port custom behavior to the new package layout
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path, old, new, label):
+              text = path.read_text(encoding='utf-8')
+              if new in text:
+                  print(f'{label}: already applied')
+                  return
+              if old not in text:
+                  raise SystemExit(f'{label}: patch target not found')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+              print(f'{label}: applied')
+
+          # 1. Nested config keeps the first-stage web-search mode.
+          config = Path('src/nano_banana/core/config.py')
+          replace_once(
+              config,
+              '''    if isinstance(chat, dict):
+                  for key in ("base_url", "api_key", "model"):
+                      if key in chat:
+                          result[key] = chat[key]
+          ''',
+              '''    if isinstance(chat, dict):
+                  for key in ("base_url", "api_key", "model"):
+                      if key in chat:
+                          result[key] = chat[key]
+                  if "web_search_mode" in chat:
+                      result["chat_web_search_mode"] = chat["web_search_mode"]
+                  elif "chat_web_search_mode" in chat:
+                      result["chat_web_search_mode"] = chat["chat_web_search_mode"]
+          ''',
+              'config flatten',
+          )
+          replace_once(
+              config,
+              '''        "chat": {
+                      "base_url": flat.get("base_url") or "",
+                      "api_key": flat.get("api_key") or "",
+                      "model": flat.get("model") or "",
+                  },
+          ''',
+              '''        "chat": {
+                      "base_url": flat.get("base_url") or "",
+                      "api_key": flat.get("api_key") or "",
+                      "model": flat.get("model") or "",
+                      "web_search_mode": flat.get("chat_web_search_mode") or "auto",
+                  },
+          ''',
+              'config nest',
+          )
+          replace_once(
+              config,
+              '''        "model": "gpt-5.1",
+                  "image_provider": "gemini",
+          ''',
+              '''        "model": "gpt-5.1",
+                  "chat_web_search_mode": "auto",
+                  "image_provider": "gemini",
+          ''',
+              'config default',
+          )
+          replace_once(
+              config,
+              '''        return {
+                      "base_url": (config.get("base_url") or "").strip(),
+                      "api_key": (config.get("api_key") or "").strip(),
+                      "model": (config.get("model") or "").strip(),
+                  }
+          ''',
+              '''        return {
+                      "base_url": (config.get("base_url") or "").strip(),
+                      "api_key": (config.get("api_key") or "").strip(),
+                      "model": (config.get("model") or "").strip(),
+                      "web_search_mode": (
+                          config.get("chat_web_search_mode") or "auto"
+                      ).strip(),
+                  }
+          ''',
+              'config chat getter',
+          )
+
+          # 2. OpenAI Images: inspect actual bytes and send explicit multipart MIME.
+          openai_path = Path('src/nano_banana/core/images/openai_images.py')
+          openai_text = openai_path.read_text(encoding='utf-8')
+          if '_detect_openai_input_mime' not in openai_text:
+              pattern = re.compile(
+                  r'    def _edit_image\(self, images: list\[str\], kwargs: dict\[str, Any\]\):\n'
+                  r'.*?'
+                  r'(?=\n    @staticmethod\n    def _extract_image)',
+                  re.S,
+              )
+              replacement = '''    @staticmethod
+              def _detect_openai_input_mime(image_path: str) -> tuple[str, str]:
+                  """按实际内容识别 OpenAI Images 支持的格式，并返回上传名。"""
+                  format_map = {
+                      "JPEG": ("image/jpeg", ".jpg"),
+                      "PNG": ("image/png", ".png"),
+                      "WEBP": ("image/webp", ".webp"),
+                  }
+                  try:
+                      with Image.open(image_path) as image:
+                          image_format = (image.format or "").upper()
+                          image.verify()
+                  except Exception as exc:
+                      raise ValueError(f"无法识别或读取参考图: {image_path}: {exc}") from exc
+                  if image_format not in format_map:
+                      raise ValueError(
+                          "OpenAI Images 参考图仅支持 JPEG、PNG、WebP；实际格式为 "
+                          + (image_format or "unknown")
+                      )
+                  mime_type, extension = format_map[image_format]
+                  stem = os.path.splitext(os.path.basename(image_path))[0] or "image"
+                  return mime_type, f"{stem}{extension}"
+
+              def _edit_image(self, images: list[str], kwargs: dict[str, Any]):
+                  opened_files = []
+                  upload_files = []
+                  try:
+                      for image_path in images:
+                          if not os.path.isfile(image_path):
+                              raise ValueError("OpenAI Images 编辑模式需要本地图片文件路径")
+                          mime_type, upload_name = self._detect_openai_input_mime(image_path)
+                          file_obj = open(image_path, "rb")
+                          opened_files.append(file_obj)
+                          upload_files.append((upload_name, file_obj, mime_type))
+                      image_arg = upload_files[0] if len(upload_files) == 1 else upload_files
+                      return self.client.images.edit(image=image_arg, **kwargs)
+                  finally:
+                      for file_obj in opened_files:
+                          file_obj.close()
+          '''
+              openai_text, count = pattern.subn(replacement, openai_text, count=1)
+              if count != 1:
+                  raise SystemExit(f'OpenAI MIME patch target mismatch: {count}')
+              openai_path.write_text(openai_text, encoding='utf-8')
+
+          # 3. Config UI: add three-way first-stage web switch.
+          index_path = Path('src/web/static/index.html')
+          index_text = index_path.read_text(encoding='utf-8')
+          if 'id="configChatWebSearchMode"' not in index_text:
+              old = '<div class="form-group"><label for="configModel">Model</label><input type="text" id="configModel" class="text-input"></div>'
+              new = old + '<div class="form-group"><label for="configChatWebSearchMode">第一阶段联网</label><select id="configChatWebSearchMode" class="select-input"><option value="disabled">禁止联网</option><option value="auto">自动联网</option><option value="force">强制联网</option></select></div>'
+              if old not in index_text:
+                  raise SystemExit('index config model target not found')
+              index_path.write_text(index_text.replace(old, new, 1), encoding='utf-8')
+
+          script_path = Path('src/web/static/script.js')
+          script_text = script_path.read_text(encoding='utf-8')
+          if 'currentImageTaskId:' not in script_text:
+              script_text = script_text.replace(
+                  '    imageGenAbortController: null,\n    generationHistory:',
+                  '    imageGenAbortController: null,\n    currentImageTaskId: null,\n    generationHistory:',
+                  1,
+              )
+          if 'configChatWebSearchMode:' not in script_text:
+              script_text = script_text.replace(
+                  "    configModel: document.getElementById('configModel'),\n",
+                  "    configModel: document.getElementById('configModel'),\n    configChatWebSearchMode: document.getElementById('configChatWebSearchMode'),\n",
+                  1,
+              )
+          script_path.write_text(script_text, encoding='utf-8')
+
+          image_js = Path('src/web/static/image-gen.js')
+          image_text = image_js.read_text(encoding='utf-8')
+          if "elements.configChatWebSearchMode.value" not in image_text:
+              image_text = image_text.replace(
+                  "    elements.configModel.value = state.config.model || '';\n",
+                  "    elements.configModel.value = state.config.model || '';\n    elements.configChatWebSearchMode.value = state.config.chat_web_search_mode || 'auto';\n",
+                  1,
+              )
+          if 'chat_web_search_mode: elements.configChatWebSearchMode.value' not in image_text:
+              image_text = image_text.replace(
+                  "        model: elements.configModel.value,\n",
+                  "        model: elements.configModel.value,\n        chat_web_search_mode: elements.configChatWebSearchMode.value,\n",
+                  1,
+              )
+
+          replacement = r'''async function parseImageApiResponse(response) {
+              const text = await response.text();
+              if (!text) return {};
+              try {
+                  return JSON.parse(text);
+              } catch (error) {
+                  return {
+                      error: `服务器返回非 JSON 内容 (HTTP ${response.status}): ${text.slice(0, 500)}`
+                  };
+              }
+          }
+
+          function abortableDelay(ms, signal) {
+              return new Promise((resolve, reject) => {
+                  if (signal?.aborted) {
+                      reject(new DOMException('Aborted', 'AbortError'));
+                      return;
+                  }
+                  const timer = setTimeout(() => {
+                      signal?.removeEventListener('abort', onAbort);
+                      resolve();
+                  }, ms);
+                  const onAbort = () => {
+                      clearTimeout(timer);
+                      reject(new DOMException('Aborted', 'AbortError'));
+                  };
+                  signal?.addEventListener('abort', onAbort, { once: true });
+              });
+          }
+
+          async function waitForImageTask(taskId, signal) {
+              while (true) {
+                  const response = await fetch(`/api/generate-image/status/${taskId}`, {
+                      signal,
+                      cache: 'no-store'
+                  });
+                  const data = await parseImageApiResponse(response);
+                  if (!response.ok) {
+                      throw new Error(data.error || `任务查询失败 (HTTP ${response.status})`);
+                  }
+                  if (data.status === 'completed' && data.image) return data;
+                  if (data.status === 'failed') {
+                      throw new Error(data.error || '图片生成失败');
+                  }
+                  if (data.status === 'cancelled') {
+                      const error = new Error('已取消生成');
+                      error.name = 'ImageTaskCancelled';
+                      throw error;
+                  }
+                  await abortableDelay(1000, signal);
+              }
+          }
+
+          async function cancelImageTask(taskId) {
+              if (!taskId) return;
+              try {
+                  await fetch(`/api/generate-image/cancel/${taskId}`, {
+                      method: 'POST',
+                      keepalive: true
+                  });
+              } catch (error) {
+                  console.warn('Cancel image task failed:', error);
+              }
+          }
+
+          function renderCancelledImageTask() {
+              if (state.generationHistory.length) {
+                  renderGenerationResult(state.generationHistory[state.generationHistory.length - 1]);
+                  return;
+              }
+              const cancelledState = document.createElement('div');
+              cancelledState.className = 'empty-state';
+              const text = document.createElement('p');
+              text.textContent = '已取消生成';
+              cancelledState.appendChild(text);
+              elements.resultPreview.replaceChildren(cancelledState);
+          }
+
+          function renderImageTaskError(message) {
+              elements.resultPreview.classList.add('has-error');
+              const errorState = document.createElement('div');
+              errorState.className = 'generation-error';
+              errorState.setAttribute('role', 'alert');
+              const title = document.createElement('strong');
+              title.textContent = '生成失败';
+              const detail = document.createElement('p');
+              detail.className = 'generation-error-message';
+              detail.textContent = message;
+              errorState.append(title, detail);
+              elements.resultPreview.replaceChildren(errorState);
+          }
+
+          async function generateImage() {
+              // 生成中再次点击：终止本标签页轮询，并向服务器发送任务取消标记。
+              if (state.isGenerating) {
+                  const taskId = state.currentImageTaskId;
+                  state.imageGenAbortController?.abort();
+                  if (taskId) void cancelImageTask(taskId);
+                  return;
+              }
+
+              const sidebar = document.getElementById('sidebar');
+              const sidebarOverlay = document.getElementById('sidebarOverlay');
+              if (sidebar) sidebar.classList.remove('open');
+              if (sidebarOverlay) sidebarOverlay.classList.remove('active');
+
+              const prompt = elements.jsonPreviewText.value;
+              if (!prompt || prompt.length < 5) {
+                  showToast('请先配置提示词', 'warning');
+                  return;
+              }
+
+              const provider = getActiveImageProvider();
+              const model = getActiveImageModel();
+              const providerConfig = state.imageProviders[provider];
+              if (!providerConfig?.is_configured || !model) {
+                  showToast('请先完成当前图片渠道配置', 'warning');
+                  updateImageGenerationAvailability();
+                  return;
+              }
+
+              state.isGenerating = true;
+              state.currentImageTaskId = null;
+              state.imageGenAbortController = new AbortController();
+              updateImageGenerationAvailability();
+
+              const genBtnDefaultHtml = elements.generateImageBtn.innerHTML;
+              elements.resultPreview.classList.remove('has-error');
+              const loadingState = document.createElement('div');
+              loadingState.className = 'empty-state';
+              const elapsedText = document.createElement('p');
+              elapsedText.textContent = '图片任务正在提交';
+              loadingState.appendChild(elapsedText);
+              elements.resultPreview.replaceChildren(loadingState);
+
+              const stopTimer = startElapsedTimer(seconds => {
+                  elapsedText.innerHTML = `图片生成中 · 已耗时 <strong>${seconds}</strong> 秒`;
+                  elements.generateImageBtn.textContent = `取消生成 · ${seconds}s`;
+              });
+
+              try {
+                  await persistImageGenerationSettings(true, true);
+                  const response = await fetch('/api/generate-image', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                          prompt,
+                          images: state.uploadedImages,
+                          provider,
+                          model,
+                          options: collectImageOptions()
+                      }),
+                      signal: state.imageGenAbortController.signal
+                  });
+                  const submitted = await parseImageApiResponse(response);
+                  if (!response.ok || !submitted.task_id) {
+                      throw new Error(
+                          submitted.error || `任务提交失败 (HTTP ${response.status} ${response.statusText})`
+                      );
+                  }
+
+                  state.currentImageTaskId = submitted.task_id;
+                  const result = await waitForImageTask(
+                      submitted.task_id,
+                      state.imageGenAbortController.signal
+                  );
+                  state.generationHistory.push(result.image);
+                  if (state.generationHistory.length > 8) state.generationHistory.shift();
+                  renderGenerationResult(result.image);
+                  showToast('图片生成成功!', 'success');
+              } catch (error) {
+                  if (error.name === 'AbortError' || error.name === 'ImageTaskCancelled') {
+                      renderCancelledImageTask();
+                      showToast('已取消生成', 'info');
+                  } else {
+                      renderImageTaskError(error.message || String(error));
+                      showToast('图片生成失败', 'error');
+                  }
+              } finally {
+                  stopTimer();
+                  state.isGenerating = false;
+                  state.currentImageTaskId = null;
+                  state.imageGenAbortController = null;
+                  updateImageGenerationAvailability();
+                  elements.generateImageBtn.innerHTML = genBtnDefaultHtml;
+              }
+          }
+          '''
+          function_pattern = re.compile(
+              r'async function generateImage\(\) \{.*?(?=\n/\*\*\n \* 渲染生成结果)',
+              re.S,
+          )
+          image_text, count = function_pattern.subn(replacement.rstrip() + '\n', image_text, count=1)
+          if count != 1:
+              raise SystemExit(f'image-gen generateImage target mismatch: {count}')
+          image_js.write_text(image_text, encoding='utf-8')
+          PY
+
+      - name: Validate syntax and install test dependencies
+        shell: bash
+        run: |
+          python -m py_compile \
+            src/nano_banana/core/config.py \
+            src/nano_banana/core/web_search.py \
+            src/nano_banana/core/images/openai_images.py \
+            src/nano_banana/web/blueprints/chat.py \
+            src/nano_banana/web/blueprints/config.py \
+            src/nano_banana/web/blueprints/images.py \
+            src/nano_banana/web/image_tasks.py
+          node --check src/web/static/script.js
+          node --check src/web/static/image-gen.js
+          pip install -e '.[web,dev]'
+
+      - name: Run focused regression tests
+        shell: bash
+        run: |
+          pytest -q \
+            tests/test_ai_config.py \
+            tests/test_web_prompt_streaming.py \
+            tests/test_web_image_generation.py \
+            tests/test_stage1_web_search.py \
+            tests/test_image_tasks.py \
+            tests/test_openai_image_mime.py \
+            tests/test_web_search_config.py
+
+      - name: Commit integrated source
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/nano_banana/core/config.py \
+            src/nano_banana/core/images/openai_images.py \
+            src/web/static/index.html \
+            src/web/static/script.js \
+            src/web/static/image-gen.js
+          if git diff --cached --quiet; then
+            echo 'No generated patch changes.'
+          else
+            git commit -m 'feat(web): 在上游新架构中恢复联网与异步生图增强'
+            git push origin HEAD:sync/upstream-2026-08-19
+          fi
