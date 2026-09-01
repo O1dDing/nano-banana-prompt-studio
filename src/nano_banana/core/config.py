@@ -21,6 +21,10 @@ def flatten_legacy_or_nested(data: dict[str, Any]) -> dict[str, Any]:
         for key in ("base_url", "api_key", "model"):
             if key in chat:
                 result[key] = chat[key]
+        if "web_search_mode" in chat:
+            result["chat_web_search_mode"] = chat["web_search_mode"]
+        elif "chat_web_search_mode" in chat:
+            result["chat_web_search_mode"] = chat["chat_web_search_mode"]
     image = data.get("image")
     if isinstance(image, dict):
         if "active" in image:
@@ -57,6 +61,7 @@ def nest_config(flat: dict[str, Any]) -> dict[str, Any]:
             "base_url": flat.get("base_url") or "",
             "api_key": flat.get("api_key") or "",
             "model": flat.get("model") or "",
+            "web_search_mode": flat.get("chat_web_search_mode") or "auto",
         },
         "image": {
             "active": flat.get("image_provider") or "gemini",
@@ -73,6 +78,7 @@ class AIConfigManager:
         "base_url": "https://api.openai.com/v1",
         "api_key": "",
         "model": "gpt-5.1",
+        "chat_web_search_mode": "auto",
         "image_provider": "gemini",
         "gemini_base_url": "",
         "gemini_api_key": "",
@@ -156,6 +162,9 @@ class AIConfigManager:
             "base_url": (config.get("base_url") or "").strip(),
             "api_key": (config.get("api_key") or "").strip(),
             "model": (config.get("model") or "").strip(),
+            "web_search_mode": (
+                config.get("chat_web_search_mode") or "auto"
+            ).strip(),
         }
     
     def get_base_url(self) -> str:

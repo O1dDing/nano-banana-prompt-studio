@@ -32,6 +32,7 @@ function openConfigModal() {
     elements.configBaseUrl.value = state.config.base_url || '';
     elements.configApiKey.value = ''; // Don't show API key
     elements.configModel.value = state.config.model || '';
+    elements.configChatWebSearchMode.value = state.config.chat_web_search_mode || 'auto';
 
     const configuredProvider = state.config.image_provider || 'gemini';
     elements.configImageProvider.value = state.imageProviders[configuredProvider]
@@ -60,6 +61,7 @@ async function saveConfigs() {
     const payload = {
         base_url: elements.configBaseUrl.value,
         model: elements.configModel.value,
+        chat_web_search_mode: elements.configChatWebSearchMode.value,
         image_provider: elements.configImageProvider.value,
         gemini_base_url: elements.configGeminiBaseUrl.value,
         gemini_model: elements.configGeminiModel.value,
@@ -461,14 +463,107 @@ function renderUploadedImages() {
 // ========================================
 // Image Generation
 // ========================================
+async function parseImageApiResponse(response) {
+    const text = await response.text();
+    if (!text) return {};
+    try {
+        return JSON.parse(text);
+    } catch (error) {
+        return {
+            error: `服务器返回非 JSON 内容 (HTTP ${response.status}): ${text.slice(0, 500)}`
+        };
+    }
+}
+
+function abortableDelay(ms, signal) {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new DOMException('Aborted', 'AbortError'));
+            return;
+        }
+        const timer = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        const onAbort = () => {
+            clearTimeout(timer);
+            reject(new DOMException('Aborted', 'AbortError'));
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
+async function waitForImageTask(taskId, signal) {
+    while (true) {
+        const response = await fetch(`/api/generate-image/status/${taskId}`, {
+            signal,
+            cache: 'no-store'
+        });
+        const data = await parseImageApiResponse(response);
+        if (!response.ok) {
+            throw new Error(data.error || `任务查询失败 (HTTP ${response.status})`);
+        }
+        if (data.status === 'completed' && data.image) return data;
+        if (data.status === 'failed') {
+            throw new Error(data.error || '图片生成失败');
+        }
+        if (data.status === 'cancelled') {
+            const error = new Error('已取消生成');
+            error.name = 'ImageTaskCancelled';
+            throw error;
+        }
+        await abortableDelay(1000, signal);
+    }
+}
+
+async function cancelImageTask(taskId) {
+    if (!taskId) return;
+    try {
+        await fetch(`/api/generate-image/cancel/${taskId}`, {
+            method: 'POST',
+            keepalive: true
+        });
+    } catch (error) {
+        console.warn('Cancel image task failed:', error);
+    }
+}
+
+function renderCancelledImageTask() {
+    if (state.generationHistory.length) {
+        renderGenerationResult(state.generationHistory[state.generationHistory.length - 1]);
+        return;
+    }
+    const cancelledState = document.createElement('div');
+    cancelledState.className = 'empty-state';
+    const text = document.createElement('p');
+    text.textContent = '已取消生成';
+    cancelledState.appendChild(text);
+    elements.resultPreview.replaceChildren(cancelledState);
+}
+
+function renderImageTaskError(message) {
+    elements.resultPreview.classList.add('has-error');
+    const errorState = document.createElement('div');
+    errorState.className = 'generation-error';
+    errorState.setAttribute('role', 'alert');
+    const title = document.createElement('strong');
+    title.textContent = '生成失败';
+    const detail = document.createElement('p');
+    detail.className = 'generation-error-message';
+    detail.textContent = message;
+    errorState.append(title, detail);
+    elements.resultPreview.replaceChildren(errorState);
+}
+
 async function generateImage() {
-    // 生成中再次点击 = 取消
+    // 生成中再次点击：终止本标签页轮询，并向服务器发送任务取消标记。
     if (state.isGenerating) {
-        if (state.imageGenAbortController) state.imageGenAbortController.abort();
+        const taskId = state.currentImageTaskId;
+        state.imageGenAbortController?.abort();
+        if (taskId) void cancelImageTask(taskId);
         return;
     }
 
-    // 移动端点击生成后自动关闭侧边栏
     const sidebar = document.getElementById('sidebar');
     const sidebarOverlay = document.getElementById('sidebarOverlay');
     if (sidebar) sidebar.classList.remove('open');
@@ -490,22 +585,18 @@ async function generateImage() {
     }
 
     state.isGenerating = true;
+    state.currentImageTaskId = null;
     state.imageGenAbortController = new AbortController();
     updateImageGenerationAvailability();
 
-    // 生成中状态：骨架屏 + 实时耗时反馈
     const genBtnDefaultHtml = elements.generateImageBtn.innerHTML;
     elements.resultPreview.classList.remove('has-error');
-    elements.resultPreview.replaceChildren();
-    const generatingState = document.createElement('div');
-    generatingState.className = 'generating-state';
-    const skeleton = document.createElement('div');
-    skeleton.className = 'result-skeleton';
-    const elapsedText = document.createElement('div');
-    elapsedText.className = 'gen-elapsed';
-    generatingState.appendChild(skeleton);
-    generatingState.appendChild(elapsedText);
-    elements.resultPreview.appendChild(generatingState);
+    const loadingState = document.createElement('div');
+    loadingState.className = 'empty-state';
+    const elapsedText = document.createElement('p');
+    elapsedText.textContent = '图片任务正在提交';
+    loadingState.appendChild(elapsedText);
+    elements.resultPreview.replaceChildren(loadingState);
 
     const stopTimer = startElapsedTimer(seconds => {
         elapsedText.innerHTML = `图片生成中 · 已耗时 <strong>${seconds}</strong> 秒`;
@@ -513,11 +604,12 @@ async function generateImage() {
     });
 
     try {
+        await persistImageGenerationSettings(true, true);
         const response = await fetch('/api/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                prompt: prompt,
+                prompt,
                 images: state.uploadedImages,
                 provider,
                 model,
@@ -525,60 +617,34 @@ async function generateImage() {
             }),
             signal: state.imageGenAbortController.signal
         });
-
-        // 网关 502 等场景返回的可能是 HTML，直接 .json() 会抛
-        // "Unexpected token" 这种没有意义的错误
-        let data = null;
-        try {
-            data = await response.json();
-        } catch (parseError) {
-            data = null;
-        }
-
-        if (response.ok && data && data.image) {
-            state.generationHistory.push(data.image);
-            if (state.generationHistory.length > 8) state.generationHistory.shift();
-            renderGenerationResult(data.image);
-            showToast('图片生成成功!', 'success');
-        } else {
+        const submitted = await parseImageApiResponse(response);
+        if (!response.ok || !submitted.task_id) {
             throw new Error(
-                (data && data.error) || `请求失败 (HTTP ${response.status} ${response.statusText})`
+                submitted.error || `任务提交失败 (HTTP ${response.status} ${response.statusText})`
             );
         }
 
-    } catch (e) {
-        if (e.name === 'AbortError') {
-            if (state.generationHistory.length) {
-                // 取消后回显最近一张历史图
-                renderGenerationResult(state.generationHistory[state.generationHistory.length - 1]);
-            } else {
-                const cancelledState = document.createElement('div');
-                cancelledState.className = 'empty-state';
-                const text = document.createElement('p');
-                text.textContent = '已取消生成';
-                cancelledState.appendChild(text);
-                elements.resultPreview.replaceChildren(cancelledState);
-            }
-            showToast('已取消生成');
+        state.currentImageTaskId = submitted.task_id;
+        const result = await waitForImageTask(
+            submitted.task_id,
+            state.imageGenAbortController.signal
+        );
+        state.generationHistory.push(result.image);
+        if (state.generationHistory.length > 8) state.generationHistory.shift();
+        renderGenerationResult(result.image);
+        showToast('图片生成成功!', 'success');
+    } catch (error) {
+        if (error.name === 'AbortError' || error.name === 'ImageTaskCancelled') {
+            renderCancelledImageTask();
+            showToast('已取消生成', 'info');
         } else {
-            showToast('生成错误: ' + e.message, 'error');
-            elements.resultPreview.classList.add('has-error');
-            const errorState = document.createElement('div');
-            errorState.className = 'generation-error';
-            errorState.setAttribute('role', 'alert');
-            const title = document.createElement('strong');
-            title.className = 'generation-error-title';
-            title.textContent = '生成失败';
-            const message = document.createElement('p');
-            message.className = 'generation-error-message';
-            message.textContent = e.message;
-            errorState.appendChild(title);
-            errorState.appendChild(message);
-            elements.resultPreview.replaceChildren(errorState);
+            renderImageTaskError(error.message || String(error));
+            showToast('图片生成失败', 'error');
         }
     } finally {
         stopTimer();
         state.isGenerating = false;
+        state.currentImageTaskId = null;
         state.imageGenAbortController = null;
         updateImageGenerationAvailability();
         elements.generateImageBtn.innerHTML = genBtnDefaultHtml;

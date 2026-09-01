@@ -13,6 +13,7 @@ const state = {
     uploadedImages: [], // Base64 strings
     isGenerating: false,
     imageGenAbortController: null,
+    currentImageTaskId: null,
     generationHistory: [] // 本次会话生成的图片 dataURL，最新在末尾
 };
 
@@ -195,6 +196,7 @@ const elements = {
     configBaseUrl: document.getElementById('configBaseUrl'),
     configApiKey: document.getElementById('configApiKey'),
     configModel: document.getElementById('configModel'),
+    configChatWebSearchMode: document.getElementById('configChatWebSearchMode'),
     // Image generation Config
     configImageProvider: document.getElementById('configImageProvider'),
     configGeminiBaseUrl: document.getElementById('configGeminiBaseUrl'),

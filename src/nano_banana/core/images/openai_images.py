@@ -151,15 +151,41 @@ class OpenAIImagesProvider:
             OPENAI_IMAGES_SIZE_MAP["2K"]["1:1"],
         )
 
+    @staticmethod
+    def _detect_openai_input_mime(image_path: str) -> tuple[str, str]:
+        """按实际内容识别 OpenAI Images 支持的格式，并返回上传名。"""
+        format_map = {
+            "JPEG": ("image/jpeg", ".jpg"),
+            "PNG": ("image/png", ".png"),
+            "WEBP": ("image/webp", ".webp"),
+        }
+        try:
+            with Image.open(image_path) as image:
+                image_format = (image.format or "").upper()
+                image.verify()
+        except Exception as exc:
+            raise ValueError(f"无法识别或读取参考图: {image_path}: {exc}") from exc
+        if image_format not in format_map:
+            raise ValueError(
+                "OpenAI Images 参考图仅支持 JPEG、PNG、WebP；实际格式为 "
+                + (image_format or "unknown")
+            )
+        mime_type, extension = format_map[image_format]
+        stem = os.path.splitext(os.path.basename(image_path))[0] or "image"
+        return mime_type, f"{stem}{extension}"
+
     def _edit_image(self, images: list[str], kwargs: dict[str, Any]):
         opened_files = []
+        upload_files = []
         try:
             for image_path in images:
                 if not os.path.isfile(image_path):
                     raise ValueError("OpenAI Images 编辑模式需要本地图片文件路径")
-                opened_files.append(open(image_path, "rb"))
-
-            image_arg = opened_files[0] if len(opened_files) == 1 else opened_files
+                mime_type, upload_name = self._detect_openai_input_mime(image_path)
+                file_obj = open(image_path, "rb")
+                opened_files.append(file_obj)
+                upload_files.append((upload_name, file_obj, mime_type))
+            image_arg = upload_files[0] if len(upload_files) == 1 else upload_files
             return self.client.images.edit(image=image_arg, **kwargs)
         finally:
             for file_obj in opened_files:
