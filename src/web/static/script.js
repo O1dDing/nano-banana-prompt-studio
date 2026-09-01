@@ -27,7 +27,7 @@ let draftSaveTimer = null;
 
 function saveDraftNow() {
     try {
-        localStorage.setItem(
+        sessionStorage.setItem(
             DRAFT_STORAGE_KEY,
             JSON.stringify({ savedAt: Date.now(), data: getFormData() })
         );
@@ -64,7 +64,15 @@ function draftHasMeaningfulContent(data) {
 
 function restoreDraft() {
     try {
-        const raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+        let raw = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+        if (!raw) {
+            // 只迁移一次旧版本的共享草稿；此后每个标签页拥有独立草稿。
+            raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+            if (raw) {
+                sessionStorage.setItem(DRAFT_STORAGE_KEY, raw);
+                localStorage.removeItem(DRAFT_STORAGE_KEY);
+            }
+        }
         if (!raw) return;
         const draft = JSON.parse(raw);
         if (!draft || !draft.data || typeof draft.data !== 'object') return;
