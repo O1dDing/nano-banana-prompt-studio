@@ -422,7 +422,7 @@ class OpenAIImagesProvider:
 
         if image_format not in format_map:
             raise ValueError(
-                f"OpenAI Images 参考图仅支持 JPEG、PNG、WebP；实际格式为 {image_format or chr(39) + "unknown" + chr(39)}"
+                "OpenAI Images 参考图仅支持 JPEG、PNG、WebP；实际格式为 " + (image_format or "unknown")
             )
 
         mime_type, extension = format_map[image_format]
