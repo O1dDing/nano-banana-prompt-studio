@@ -1,0 +1,184 @@
+name: Harden multi-tab configuration writes
+
+on:
+  push:
+    branches:
+      - sync/upstream-2026-08-19
+    paths:
+      - '.github/workflows/harden-multitab.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Add lock and atomic replace to AI config writes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('src/nano_banana/core/config.py')
+          text = path.read_text(encoding='utf-8')
+
+          if 'import threading' not in text:
+              text = text.replace(
+                  'from copy import deepcopy\nfrom typing import Any\n',
+                  'from copy import deepcopy\nimport os\nimport tempfile\nimport threading\nfrom typing import Any\n',
+                  1,
+              )
+
+          old_init = '''    def __init__(self):
+                  self.config_path = get_resource_path("config/ai_config.yaml")
+                  self._ensure_config_exists()
+          '''
+          new_init = '''    def __init__(self):
+                  self._config_lock = threading.RLock()
+                  self.config_path = get_resource_path("config/ai_config.yaml")
+                  self._ensure_config_exists()
+          '''
+          if new_init not in text:
+              if old_init not in text:
+                  raise SystemExit('AIConfigManager.__init__ target not found')
+              text = text.replace(old_init, new_init, 1)
+
+          pattern = re.compile(
+              r'    def load_config\(self\) -> dict:\n.*?'
+              r'(?=    def _normalize_flat\(self, data: dict\) -> dict:)',
+              re.S,
+          )
+          replacement = '''    def load_config(self) -> dict:
+                  """加载 AI 配置；与写入共用可重入锁，避免并发读取半写文件。"""
+                  with self._config_lock:
+                      try:
+                          if self.config_path.exists():
+                              with open(self.config_path, "r", encoding="utf-8") as f:
+                                  data = yaml.safe_load(f)
+                                  if isinstance(data, dict) and data:
+                                      return self._normalize_flat(data)
+                      except Exception as e:
+                          print(f"加载AI配置失败: {e}")
+                      return {
+                          key: deepcopy(default) if isinstance(default, dict) else ""
+                          for key, default in self.DEFAULT_CONFIG.items()
+                      }
+
+              def save_config(self, config: dict, merge_existing: bool = True) -> bool:
+                  """加锁并原子写入配置，支持多个 Web 标签页并发操作。"""
+                  with self._config_lock:
+                      temp_path = None
+                      try:
+                          current = self.load_config() if merge_existing else {
+                              key: deepcopy(default) if isinstance(default, dict) else ""
+                              for key, default in self.DEFAULT_CONFIG.items()
+                          }
+                          updates = flatten_legacy_or_nested(config) if isinstance(config, dict) else {}
+                          current.update(updates)
+                          nested = nest_config(current)
+                          self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                          fd, temp_path = tempfile.mkstemp(
+                              prefix=f".{self.config_path.name}.",
+                              suffix=".tmp",
+                              dir=str(self.config_path.parent),
+                          )
+                          with os.fdopen(fd, "w", encoding="utf-8") as f:
+                              yaml.dump(
+                                  nested,
+                                  f,
+                                  allow_unicode=True,
+                                  default_flow_style=False,
+                                  sort_keys=False,
+                              )
+                              f.flush()
+                              os.fsync(f.fileno())
+                          os.replace(temp_path, self.config_path)
+                          temp_path = None
+                          return True
+                      except Exception as e:
+                          print(f"保存AI配置失败: {e}")
+                          return False
+                      finally:
+                          if temp_path and os.path.exists(temp_path):
+                              try:
+                                  os.remove(temp_path)
+                              except OSError:
+                                  pass
+
+          '''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'load/save config patch target mismatch: {count}')
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Add concurrency regression test
+        shell: bash
+        run: |
+          cat > tests/test_config_thread_safety.py <<'PY'
+          import tempfile
+          import threading
+          from pathlib import Path
+
+          import yaml
+
+          from nano_banana.core.config import AIConfigManager
+
+
+          def test_concurrent_config_writes_remain_valid_yaml():
+              with tempfile.TemporaryDirectory() as directory:
+                  manager = AIConfigManager()
+                  manager.config_path = Path(directory) / "ai_config.yaml"
+                  errors = []
+
+                  def writer(index):
+                      for iteration in range(30):
+                          if not manager.save_config(
+                              {
+                                  "model": f"model-{index}-{iteration}",
+                                  "chat_web_search_mode": (
+                                      "force" if iteration % 2 else "auto"
+                                  ),
+                              }
+                          ):
+                              errors.append((index, iteration))
+
+                  threads = [threading.Thread(target=writer, args=(i,)) for i in range(8)]
+                  for thread in threads:
+                      thread.start()
+                  for thread in threads:
+                      thread.join()
+
+                  assert errors == []
+                  parsed = yaml.safe_load(manager.config_path.read_text(encoding="utf-8"))
+                  assert isinstance(parsed, dict)
+                  assert parsed["chat"]["model"].startswith("model-")
+                  assert parsed["chat"]["web_search_mode"] in {"auto", "force"}
+                  assert list(Path(directory).glob("*.tmp")) == []
+          PY
+
+      - name: Validate full suite
+        shell: bash
+        run: |
+          python -m py_compile src/nano_banana/core/config.py
+          pip install -e '.[web,dev]'
+          pytest -q
+
+      - name: Commit hardening
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/nano_banana/core/config.py tests/test_config_thread_safety.py
+          git commit -m 'fix(config): 原子化并发配置写入'
+          git push origin HEAD:sync/upstream-2026-08-19
