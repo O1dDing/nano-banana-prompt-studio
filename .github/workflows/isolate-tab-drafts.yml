@@ -1,0 +1,108 @@
+name: Isolate drafts between browser tabs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/isolate-tab-drafts.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  isolate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Move auto-saved draft from localStorage to per-tab sessionStorage
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/web/static/script.js')
+          text = path.read_text(encoding='utf-8')
+
+          old_save = '''        localStorage.setItem(
+                      DRAFT_STORAGE_KEY,
+                      JSON.stringify({ savedAt: Date.now(), data: getFormData() })
+                  );
+          '''
+          new_save = '''        sessionStorage.setItem(
+                      DRAFT_STORAGE_KEY,
+                      JSON.stringify({ savedAt: Date.now(), data: getFormData() })
+                  );
+          '''
+          if new_save not in text:
+              if old_save not in text:
+                  raise SystemExit('draft save target not found')
+              text = text.replace(old_save, new_save, 1)
+
+          old_restore = '''        const raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+                  if (!raw) return;
+                  const draft = JSON.parse(raw);
+          '''
+          new_restore = '''        let raw = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+                  if (!raw) {
+                      // 只迁移一次旧版本的共享草稿；此后每个标签页拥有独立草稿。
+                      raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+                      if (raw) {
+                          sessionStorage.setItem(DRAFT_STORAGE_KEY, raw);
+                          localStorage.removeItem(DRAFT_STORAGE_KEY);
+                      }
+                  }
+                  if (!raw) return;
+                  const draft = JSON.parse(raw);
+          '''
+          if new_restore not in text:
+              if old_restore not in text:
+                  raise SystemExit('draft restore target not found')
+              text = text.replace(old_restore, new_restore, 1)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Add multi-tab draft regression test
+        shell: bash
+        run: |
+          cat > tests/test_web_tab_isolation.py <<'PY'
+          from pathlib import Path
+
+
+          ROOT = Path(__file__).resolve().parents[1]
+          SCRIPT = ROOT / "src" / "web" / "static" / "script.js"
+
+
+          def test_drafts_are_saved_per_tab_with_legacy_migration():
+              script = SCRIPT.read_text(encoding="utf-8")
+              assert "sessionStorage.setItem(\n            DRAFT_STORAGE_KEY" in script
+              assert "let raw = sessionStorage.getItem(DRAFT_STORAGE_KEY);" in script
+              assert "raw = localStorage.getItem(DRAFT_STORAGE_KEY);" in script
+              assert "localStorage.removeItem(DRAFT_STORAGE_KEY);" in script
+              assert "localStorage.setItem(\n            DRAFT_STORAGE_KEY" not in script
+          PY
+
+      - name: Validate full suite and JavaScript
+        shell: bash
+        run: |
+          pip install -e '.[web,dev]'
+          pytest -q
+          node --check src/web/static/script.js
+          node --check src/web/static/image-gen.js
+
+      - name: Commit tab-isolation hardening
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/web/static/script.js tests/test_web_tab_isolation.py
+          git commit -m 'fix(web): 隔离多标签页草稿状态'
+          git push origin HEAD:main
