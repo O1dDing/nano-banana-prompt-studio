@@ -63,13 +63,15 @@ def test_codex_image_actual_dimensions_not_upscaled():
     buf=BytesIO();Image.new('RGB',(32,64)).save(buf,format='PNG')
     url='data:image/png;base64,'+base64.b64encode(buf.getvalue()).decode()
     class FakeBridge:
+        def __init__(self, identity=None):
+            assert identity == 'tenant-test'
         def iter_job(self,payload,cancelled):
             assert payload['kind']=='image'
             assert '$imagegen' in payload['messages'][0]['content'][-1]['text']
             yield {'status':'completed','result':{'images':[url],'metadata':{'billing':'codex_subscription'}}}
         def close(self):pass
     with patch('nano_banana.core.images.codex_images.CodexBridge', FakeBridge):
-        provider=CodexImageProvider()
+        provider=CodexImageProvider(codex_identity='tenant-test')
         provider.set_generation_options({'size':'2048x1152','quality':'high','output_format':'webp'})
         image=provider.generate_image('cat')
     assert image.size==(32,64)
