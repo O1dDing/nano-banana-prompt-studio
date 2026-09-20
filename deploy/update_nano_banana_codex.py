@@ -191,6 +191,18 @@ def deploy(args, data):
     source.parent.mkdir(exist_ok=True)
     note('在独立 release 目录拉取 Fork；不覆盖原项目本地修改')
     run('git', 'clone', '--depth', '1', '--branch', args.ref, '--single-branch', args.repo, source)
+    required_bridge = [
+        source / 'src/nano_banana/codex_bridge/__init__.py',
+        source / 'src/nano_banana/codex_bridge/server.py',
+        source / 'src/nano_banana/codex_bridge/runtime.py',
+        source / 'deploy/codex.Dockerfile',
+    ]
+    missing_bridge = [str(path.relative_to(source)) for path in required_bridge if not path.is_file()]
+    if missing_bridge:
+        raise RuntimeError(
+            '拉取的发布源码缺少 Codex Bridge 文件，未构建也未停止旧服务：'
+            + ', '.join(missing_bridge)
+        )
     sha = run('git', '-C', source, 'rev-parse', 'HEAD', capture=True).stdout.strip()
     web_image = os.getenv('NANO_WEB_IMAGE') or f'nano-banana-web:codex-{sha[:12]}-{stamp}'
     bridge_image = os.getenv('NANO_CODEX_IMAGE') or f'nano-banana-codex:{sha[:12]}-{stamp}'
@@ -198,9 +210,24 @@ def deploy(args, data):
     if not os.getenv('NANO_WEB_IMAGE'):
         run('docker', 'build', '--pull', '-f', source / 'web_dockerfile', '-t', web_image, source)
     if not os.getenv('NANO_CODEX_IMAGE'):
-        run('docker', 'build', '--pull', '-f', source / 'deploy/codex.Dockerfile', '-t', bridge_image, source)
+        # Bridge 很小且持有关键运行入口；强制无缓存重建，避免复用历史损坏/过期 COPY 层。
+        run('docker', 'build', '--pull', '--no-cache',
+            '-f', source / 'deploy/codex.Dockerfile', '-t', bridge_image, source)
     run('docker', 'image', 'inspect', web_image, capture=True)
     run('docker', 'image', 'inspect', bridge_image, capture=True)
+
+    # 在创建长期 Bridge 容器、尤其是在停止旧 Web 之前，先启动一次干净容器验证安装结果。
+    # 这会直接捕获 ModuleNotFoundError 等镜像打包问题。
+    bridge_probe = (
+        "import importlib.util, pathlib; "
+        "assert importlib.util.find_spec('nano_banana.codex_bridge.server') is not None; "
+        "assert importlib.util.find_spec('nano_banana.codex_bridge.runtime') is not None; "
+        "import nano_banana.codex_bridge.server, nano_banana.codex_bridge.runtime; "
+        "assert pathlib.Path('/app/codex-protocol.json').is_file(); "
+        "print('Codex Bridge image import probe OK')"
+    )
+    run('docker', 'run', '--rm', '--entrypoint', 'python',
+        bridge_image, '-c', bridge_probe)
     secret_dir, auth = data / 'secrets', data / 'codex-auth'
     secret_dir.mkdir(exist_ok=True)
     auth.mkdir(exist_ok=True)
