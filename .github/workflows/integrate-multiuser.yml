@@ -20,9 +20,10 @@ jobs:
       - name: Integrate existing request pipelines
         run: |
           python tools/integrate_multiuser.py
+          python tools/finalize_multiuser.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src deploy
+          git add src deploy tools
           git commit -m 'feat(web): 接入多用户身份、配置与任务隔离'
       - name: Full Python regression and JavaScript syntax
         run: |
