@@ -39,7 +39,8 @@ def prompt_output_schema(current=None):
     root = _object()
     schema = get_schema()
     for field in schema.iter_fields():
-        typ = field.type
+        # 项目 schema 的 string_list 是 JSON 字符串数组，不能退化为 string。
+        typ = "array" if field.type == "string_list" else field.type
         item = {"type": typ if typ in {"string", "boolean", "integer", "number", "array"} else "string"}
         if typ == "array":
             item["items"] = {"type": "string"}
