@@ -45,7 +45,7 @@ def validate_payload(payload):
         raise ValueError("模型名称无效")
     if payload.get("web_search_mode", "auto") not in {"disabled", "auto", "force"}:
         raise ValueError("不允许的联网模式")
-    if payload.get("effort", "auto") not in {"auto", "minimal", "low", "medium", "high", "xhigh"}:
+    if payload.get("effort", "auto") not in {"auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"}:
         raise ValueError("不允许的推理强度")
     if payload["kind"] == "prompt":
         schema = payload.get("output_schema")
