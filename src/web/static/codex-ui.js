@@ -4,12 +4,13 @@ function initCodexControls() {
     if (!document.getElementById('configChatEngine')) {
         const box = document.createElement('div');
         box.innerHTML = '<div class="form-group"><label for="configChatEngine">提示词后端</label><select id="configChatEngine" class="select-input"><option value="api">原有 API</option><option value="codex">Codex 套餐（独立临时会话）</option></select></div>'
-          + '<div class="form-group"><label for="configCodexModel">Codex 对话模型（留空使用账户默认）</label><input id="configCodexModel" class="text-input" list="codexModels" placeholder="从本机已登录账户获取；不要填图片模型"><datalist id="codexModels"></datalist></div>'
-          + '<div class="form-group"><label for="configCodexEffort">Codex 推理强度</label><select id="configCodexEffort" class="select-input"><option>auto</option><option>minimal</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></div>'
+          + '<div class="form-group"><label>Codex 对话模型（留空使用账户默认）</label><div id="codexModelPicker" class="codex-model-picker"><input id="configCodexModel" type="hidden"><button id="configCodexModelButton" class="select-input codex-model-trigger" type="button" aria-haspopup="listbox" aria-expanded="false"><span class="codex-model-trigger-copy"><strong id="configCodexModelLabel">账户默认模型</strong><span id="configCodexModelId">留空，由 Codex 选择默认模型</span></span></button><div id="codexModelOptions" class="codex-model-menu" role="listbox" hidden></div></div></div>'
+          + '<div class="form-group"><label for="configCodexEffort">Codex 推理强度</label><select id="configCodexEffort" class="select-input"><option value="auto">auto</option></select><small id="codexEffortHelp" class="muted-text">选择模型后按账户返回的能力动态更新。</small></div>'
           + '<button id="refreshCodexStatus" class="btn btn-secondary" type="button">检查 Codex 登录/模型</button><p id="codexStatus" role="status" class="muted-text">仅私有使用；不会自动回退到收费 API。</p>';
         section.insertBefore(box, section.children[1]);
         document.getElementById('configChatEngine').addEventListener('change', toggleCodexSettings);
         document.getElementById('refreshCodexStatus').addEventListener('click', refreshCodexStatus);
+        initCodexModelPicker();
         for (const id of ['configBaseUrl', 'configApiKey', 'configModel']) {
             document.getElementById(id).closest('.form-group').dataset.apiPrompt = 'true';
         }
@@ -27,11 +28,145 @@ function initCodexControls() {
     }
 }
 
+
+function codexModelFriendlyName(modelId) {
+    const value = String(modelId || '').trim();
+    if (!value) return '账户默认模型';
+    const stripped = value.replace(/^gpt-/i, '');
+    return stripped.split('-').map(part => {
+        if (/^\d+(?:\.\d+)*$/.test(part)) return part;
+        return part ? part.charAt(0).toUpperCase() + part.slice(1) : part;
+    }).join(' ');
+}
+
+function codexEffortValues(model) {
+    const raw = model?.supportedReasoningEfforts || [];
+    const values = raw.map(item => typeof item === 'string' ? item : item?.reasoningEffort).filter(Boolean);
+    return [...new Set(values)];
+}
+
+function findCodexModel(modelId) {
+    const models = Array.isArray(state.codexModels) ? state.codexModels : [];
+    if (modelId) return models.find(item => (item.model || item.id) === modelId) || null;
+    return models.find(item => item.isDefault) || null;
+}
+
+function renderCodexModelOptions() {
+    const menu = document.getElementById('codexModelOptions');
+    if (!menu) return;
+    const current = document.getElementById('configCodexModel')?.value || '';
+    const models = Array.isArray(state.codexModels) ? state.codexModels : [];
+    const entries = [{model: '', displayName: '账户默认模型', isDefault: true}, ...models];
+
+    if (current && !entries.some(item => (item.model || item.id || '') === current)) {
+        entries.push({model: current, displayName: codexModelFriendlyName(current), unavailable: true});
+    }
+
+    menu.replaceChildren(...entries.map(item => {
+        const id = item.model || item.id || '';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'codex-model-option';
+        button.setAttribute('role', 'option');
+        button.dataset.modelId = id;
+        button.setAttribute('aria-selected', String(id === current));
+
+        const primary = document.createElement('strong');
+        primary.textContent = id ? codexModelFriendlyName(id) : '账户默认模型';
+        const secondary = document.createElement('span');
+        secondary.textContent = id || '留空，由 Codex 选择默认模型';
+        if (item.unavailable) secondary.textContent += ' · 当前账户列表未返回';
+
+        button.append(primary, secondary);
+        button.addEventListener('click', () => {
+            setCodexModelSelection(id, true);
+            closeCodexModelPicker();
+        });
+        return button;
+    }));
+}
+
+function setCodexModelSelection(modelId, updateEffort = true) {
+    const input = document.getElementById('configCodexModel');
+    const label = document.getElementById('configCodexModelLabel');
+    const idText = document.getElementById('configCodexModelId');
+    if (!input || !label || !idText) return;
+
+    input.value = modelId || '';
+    label.textContent = modelId ? codexModelFriendlyName(modelId) : '账户默认模型';
+    idText.textContent = modelId || '留空，由 Codex 选择默认模型';
+
+    document.querySelectorAll('#codexModelOptions .codex-model-option').forEach(option => {
+        option.setAttribute('aria-selected', String(option.dataset.modelId === input.value));
+    });
+    if (updateEffort) updateCodexEffortOptions(input.value, document.getElementById('configCodexEffort')?.value || 'auto');
+}
+
+function updateCodexEffortOptions(modelId, preferred = 'auto') {
+    const select = document.getElementById('configCodexEffort');
+    const help = document.getElementById('codexEffortHelp');
+    if (!select) return;
+
+    const model = findCodexModel(modelId);
+    const reported = codexEffortValues(model);
+    const values = ['auto', ...reported.filter(value => value !== 'auto')];
+    if (preferred && !values.includes(preferred) && !model) values.push(preferred);
+
+    select.replaceChildren(...values.map(value => new Option(value, value)));
+    const fallback = model?.defaultReasoningEffort && values.includes(model.defaultReasoningEffort)
+        ? model.defaultReasoningEffort
+        : 'auto';
+    select.value = values.includes(preferred) ? preferred : fallback;
+
+    if (help) {
+        const target = modelId || (model?.model || model?.id || '');
+        help.textContent = reported.length
+            ? `${target ? codexModelFriendlyName(target) : '账户默认模型'} 当前账户支持：${reported.join(' / ')}；auto 使用 Codex 默认强度。`
+            : '尚未读取该模型能力；点击“检查 Codex 登录/模型”后动态更新。';
+    }
+}
+
+function closeCodexModelPicker() {
+    const picker = document.getElementById('codexModelPicker');
+    const button = document.getElementById('configCodexModelButton');
+    const menu = document.getElementById('codexModelOptions');
+    if (!picker || !button || !menu) return;
+    picker.classList.remove('is-open');
+    button.setAttribute('aria-expanded', 'false');
+    menu.hidden = true;
+}
+
+function initCodexModelPicker() {
+    const picker = document.getElementById('codexModelPicker');
+    const button = document.getElementById('configCodexModelButton');
+    const menu = document.getElementById('codexModelOptions');
+    if (!picker || !button || !menu || button.dataset.bound === 'true') return;
+    button.dataset.bound = 'true';
+
+    button.addEventListener('click', event => {
+        event.stopPropagation();
+        const opening = !picker.classList.contains('is-open');
+        closeCodexModelPicker();
+        if (opening) {
+            renderCodexModelOptions();
+            picker.classList.add('is-open');
+            button.setAttribute('aria-expanded', 'true');
+            menu.hidden = false;
+        }
+    });
+    button.addEventListener('keydown', event => {
+        if (event.key === 'Escape') closeCodexModelPicker();
+    });
+    document.addEventListener('click', event => {
+        if (!picker.contains(event.target)) closeCodexModelPicker();
+    });
+}
+
 function loadCodexSettings() {
     initCodexControls();
     document.getElementById('configChatEngine').value = state.config.chat_engine || 'api';
-    document.getElementById('configCodexModel').value = state.config.codex_model || '';
-    document.getElementById('configCodexEffort').value = state.config.codex_effort || 'auto';
+    setCodexModelSelection(state.config.codex_model || '', false);
+    updateCodexEffortOptions(state.config.codex_model || '', state.config.codex_effort || 'auto');
     toggleCodexSettings();
 }
 
@@ -57,7 +192,13 @@ async function refreshCodexStatus() {
         output.textContent = data.logged_in
           ? `ChatGPT 已登录 · Prompt ${data.prompt_workers || data.workers} 并发 / Image ${data.image_workers || data.workers} 并发 · 临时会话 · 图片能力仍需实际任务验证`
           : (data.error || 'Codex 尚未部署或未登录');
-        document.getElementById('codexModels').replaceChildren(...(data.models || []).map(m => new Option(m.displayName || m.model, m.model)));
+        state.codexModels = Array.isArray(data.models) ? data.models : [];
+        renderCodexModelOptions();
+        setCodexModelSelection(document.getElementById('configCodexModel').value || state.config.codex_model || '', false);
+        updateCodexEffortOptions(
+            document.getElementById('configCodexModel').value || state.config.codex_model || '',
+            document.getElementById('configCodexEffort').value || state.config.codex_effort || 'auto'
+        );
         // 只读取元数据，不触发设置保存，也不改变本页已选中的 API/模型。
         await loadImageProviders();
         if (data.logged_in && !Array.from(elements.imageProviderSelect.options).some(o => o.value === 'codex_images')) {
