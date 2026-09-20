@@ -1,0 +1,48 @@
+name: Integrate and verify multiuser Codex
+on:
+  push:
+    branches: [feat/multiuser-codex-sessions-20260920]
+    paths: ['src/**', 'tests/**', 'tools/**', 'deploy/**', '.github/workflows/integrate-multiuser.yml']
+concurrency:
+  group: multiuser-integration
+  cancel-in-progress: true
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.10'}
+      - name: Integrate existing request pipelines
+        run: |
+          python tools/integrate_multiuser.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src deploy
+          git commit -m 'feat(web): 接入多用户身份、配置与任务隔离'
+      - name: Full Python regression and JavaScript syntax
+        run: |
+          pip install -e '.[web,dev]' playwright
+          pytest -q
+          python -m compileall -q src/nano_banana deploy
+          for file in src/web/static/*.js; do node --check "$file"; done
+      - name: Real browser tests with no paid calls
+        run: |
+          python -m playwright install --with-deps chromium
+          python tools/browser_smoke.py
+          python tools/multiuser_browser_smoke.py
+      - name: Build production images
+        run: |
+          docker build -f web_dockerfile -t nano-web:regression .
+          docker build -f deploy/codex.Dockerfile -t nano-codex:regression .
+          docker run --rm --entrypoint python nano-codex:regression -c 'import nano_banana.codex_bridge.multiuser'
+      - name: Exercise real Docker deployment migration and rollback
+        run: |
+          docker network create nano-regression
+          sudo --preserve-env=PATH python tools/deployment_smoke.py
+      - name: Publish tested integration only
+        run: git push origin HEAD:feat/multiuser-codex-sessions-20260920
