@@ -68,7 +68,20 @@ def main():
         elif path == '/api/codex/status':
             data = {'logged_in': True, 'image_available': True,
                     'prompt_workers': 4, 'image_workers': 4,
-                    'models': [{'model': 'account-model', 'displayName': 'Account model'}]}
+                    'models': [
+                        {'model': 'gpt-6-astra', 'displayName': 'GPT-6-Astra', 'isDefault': True,
+                         'defaultReasoningEffort': 'high', 'inputModalities': ['text', 'image'],
+                         'supportedReasoningEfforts': [
+                             {'reasoningEffort': 'low'}, {'reasoningEffort': 'medium'},
+                             {'reasoningEffort': 'high'}, {'reasoningEffort': 'xhigh'},
+                             {'reasoningEffort': 'max'}]},
+                        {'model': 'gpt-5.6-sol', 'displayName': 'GPT-5.6-Sol', 'isDefault': False,
+                         'defaultReasoningEffort': 'medium', 'inputModalities': ['text', 'image'],
+                         'supportedReasoningEfforts': [
+                             {'reasoningEffort': 'none'}, {'reasoningEffort': 'low'},
+                             {'reasoningEffort': 'medium'}, {'reasoningEffort': 'high'},
+                             {'reasoningEffort': 'xhigh'}, {'reasoningEffort': 'max'}]},
+                    ]}
         elif path == '/api/image-generation-settings':
             data = {'success': True}
         elif path == '/api/generate-image':
@@ -115,6 +128,16 @@ def main():
             assert a.locator('#configApiKey').is_hidden()
             a.locator('#refreshCodexStatus').click()
             a.wait_for_function("document.getElementById('codexStatus').textContent.includes('已登录')")
+            a.locator('#configCodexModelButton').click()
+            a.wait_for_selector('#codexModelOptions:not([hidden])')
+            astra = a.locator('.codex-model-option[data-model-id="gpt-6-astra"]')
+            assert astra.locator('strong').inner_text() == '6 Astra'
+            assert astra.locator('span').inner_text().startswith('gpt-6-astra')
+            astra.click()
+            assert a.locator('#configCodexModel').input_value() == 'gpt-6-astra'
+            efforts = a.locator('#configCodexEffort').locator('option').all_text_contents()
+            assert 'max' in efforts and 'minimal' not in efforts
+            a.locator('#configCodexEffort').select_option('max')
             a.locator('#saveConfigBtn').click()
             a.wait_for_function("!document.getElementById('configModal').classList.contains('active')")
             a.locator('#image-option-quality').select_option('max')
