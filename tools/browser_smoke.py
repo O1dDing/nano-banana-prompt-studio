@@ -191,7 +191,8 @@ def main():
             assert 'xhigh' not in a.locator('#image-option-quality').inner_text()
             assert a.locator('#image-option-output_compression').count() == 0
             assert '2.5' not in a.locator('#imageModelSelect').inner_text()
-            assert '不能' in a.locator('#imageParameterHint').inner_text()
+            assert a.locator('label[for="image-option-size"]').inner_text() == '期望像素尺寸'
+            assert '（' not in a.locator('#imageProviderOptions').inner_text()
             a.locator('#aiGenerateOpenBtn').click()
             a.wait_for_selector('#aiPromptEngineSelect')
             a.wait_for_function("document.getElementById('aiPromptEngineSelect').value === 'codex'")
