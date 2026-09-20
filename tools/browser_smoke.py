@@ -136,7 +136,7 @@ def main():
             assert '不能' in a.locator('#imageParameterHint').inner_text()
             a.locator('#aiGenerateOpenBtn').click()
             a.wait_for_selector('#aiPromptEngineSelect')
-            assert a.locator('#aiPromptEngineSelect').input_value() == 'codex'
+            a.wait_for_function("document.getElementById('aiPromptEngineSelect').value === 'codex'")
             a.wait_for_function("document.getElementById('aiPromptBackendMeta').textContent.includes('ChatGPT 已登录')")
             assert 'Codex' in a.locator('#aiPromptBackendTitle').inner_text()
             a.locator('#aiPromptEngineSelect').select_option('api')
