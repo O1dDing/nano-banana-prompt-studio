@@ -340,7 +340,9 @@ function renderAdvancedImageOptions() {
             if (option.values?.length) {
                 const list = document.createElement('datalist'); list.id = 'image-values-' + key;
                 list.replaceChildren(...option.values.map(value => new Option(value, value)));
-                input.setAttribute('list', list.id); group.appendChild(list);
+                input.setAttribute('list', list.id);
+                input.classList.add('select-arrow-input');
+                group.appendChild(list);
             }
         } else {
             input = document.createElement('select'); input.className = 'select-input image-option-input';
