@@ -42,7 +42,8 @@ def test_web_capabilities_keep_native_backend_support_but_hide_compression_contr
     assert opts['image_size']['label'] == '尺寸档位'
     assert opts['size']['label'] == '精确尺寸'
     assert opts['size']['default'] == ''
-    assert opts['size']['placeholder'] == '留空 / auto'
+    assert opts['size']['placeholder'] == '默认留空 / 16x'
+    assert 'help' not in opts['size']
     assert opts['quality']['label'] == '生成质量'
     assert opts['output_format']['label'] == '输出格式'
     assert opts['moderation']['label'] == '审核强度'
