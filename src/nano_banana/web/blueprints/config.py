@@ -51,7 +51,7 @@ def update_config():
         updates = flatten_legacy_or_nested(data)
         if updates.get("chat_engine", "api") not in {"api", "codex"}:
             return jsonify({"error": "未知提示词后端"}), 400
-        if updates.get("codex_effort", "auto") not in {"auto", "minimal", "low", "medium", "high", "xhigh"}:
+        if updates.get("codex_effort", "auto") not in {"auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"}:
             return jsonify({"error": "无效 Codex 推理强度"}), 400
         if "codex_model" in updates and (not isinstance(updates["codex_model"], str) or len(updates["codex_model"]) > 128):
             return jsonify({"error": "无效 Codex 模型名称"}), 400
