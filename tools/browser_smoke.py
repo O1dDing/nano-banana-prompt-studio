@@ -161,7 +161,7 @@ def main():
             assert a.locator('#image-option-output_compression').count() == 0
             assert a.locator('label[for="image-option-size"]').inner_text() == '精确尺寸'
             assert a.locator('#image-option-size').input_value() == ''
-            assert a.locator('#image-option-size').get_attribute('placeholder') == '留空 = 自动'
+            assert a.locator('#image-option-size').get_attribute('placeholder') == '留空 / auto'
             assert a.locator('label[for="image-option-aspect_ratio"]').inner_text() == '宽高比'
             assert a.locator('label[for="image-option-image_size"]').inner_text() == '尺寸档位'
             assert a.locator('label[for="image-option-quality"]').inner_text() == '生成质量'
