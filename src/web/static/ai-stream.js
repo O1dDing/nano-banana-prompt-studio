@@ -193,6 +193,11 @@ function openAiModal(mode) {
         elements.aiModalTitle.textContent = 'AI 修改提示词';
         elements.aiModalLabel.textContent = '描述修改要求';
     }
+
+    // 后端选择是服务器全局设置；弹窗每次打开时重新读取，避免误判当前在消耗 API 还是 Codex 额度。
+    if (typeof refreshAiPromptBackendBar === 'function') {
+        void refreshAiPromptBackendBar({reloadConfig: true});
+    }
 }
 
 async function handleAiExecute() {
