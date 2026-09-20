@@ -577,3 +577,16 @@ select.select-input, .codex-model-trigger {
 #codexStatus.is-pending {
     color: var(--text-tertiary);
 }
+
+
+/* Image size request feedback. */
+#imageParameterHint.is-experimental {
+    color: var(--warning);
+}
+#imageParameterHint.is-experimental strong {
+    color: inherit;
+    font-weight: 700;
+}
+#imageParameterHint.is-error {
+    color: var(--error-color);
+}
