@@ -5,6 +5,9 @@ on:
     paths: ['src/**', 'tests/**', 'tools/**', 'deploy/**', 'pyproject.toml', 'web_dockerfile', '.github/workflows/web-regression.yml']
   pull_request:
     branches: [main]
+concurrency:
+  group: web-regression-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -20,7 +23,7 @@ jobs:
         run: |
           pip install -e '.[web,dev]' playwright
           pytest -q
-          python -m compileall -q src/nano_banana
+          python -m compileall -q src/nano_banana deploy
           for file in src/web/static/*.js; do node --check "$file"; done
       - name: Real browser smoke test with mocked providers
         run: |
@@ -52,6 +55,8 @@ jobs:
           docker exec nano-codex-test python -c 'import urllib.request,json,pathlib; t=pathlib.Path("/run/secrets/codex-bridge-token").read_text(); r=urllib.request.Request("http://127.0.0.1:8787/health",headers={"Authorization":"Bearer "+t}); assert json.load(urllib.request.urlopen(r))["ok"]; print("Bridge health OK")'
           docker exec nano-codex-test python -c 'from nano_banana.codex_bridge.runtime import probe_status; d=probe_status(); assert not d["logged_in"]; print("Unauthenticated capability probe:",d)'
           test -z "$(docker port nano-codex-test)"
+      - name: Verify real deployment transaction and rollback
+        run: sudo --preserve-env=PATH python tools/deployment_smoke.py
       - name: Logs on failure
         if: failure()
         run: |
