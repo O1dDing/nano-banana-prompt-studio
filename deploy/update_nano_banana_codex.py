@@ -86,7 +86,7 @@ def ports_and_networks(old):
             ports.append(f'{prefix}:{target}')
     networks = [n for n in old['NetworkSettings']['Networks'] if n not in ('bridge', 'host', 'none')]
     allowed = {'/app/src/config', '/app/src/config/ai_config.yaml', '/app/src/config/options.yaml',
-               '/app/src/presets', '/run/secrets/codex-bridge-token'}
+               '/app/src/presets', '/run/secrets/codex-bridge-token', '/run/secrets/nano-admin-token', '/run/nano-web-sessions'}
     extra = [m['Destination'] for m in old.get('Mounts', []) if m['Destination'] not in allowed]
     if extra:
         raise RuntimeError('发现额外挂载，未停止旧服务。需人工核对迁移：' + ', '.join(extra))
@@ -240,6 +240,12 @@ def deploy(args, data):
         raise RuntimeError('Bridge token 文件无效，拒绝替换已有凭据')
     os.chown(token, 10001, 10001)
     os.chmod(token, 0o600)
+    admin_token = secret_dir / 'web-admin-token'
+    if not admin_token.exists():
+        admin_token.write_text(secrets.token_urlsafe(32))
+    if not admin_token.is_file() or len(admin_token.read_text().strip()) < 32:
+        raise RuntimeError('管理员密钥文件无效，拒绝覆盖')
+    os.chmod(admin_token, 0o600)
     network = f'{args.container}-codex-private'
     if run('docker', 'network', 'inspect', network, check=False, capture=True).returncode:
         run('docker', 'network', 'create', network)
@@ -251,7 +257,7 @@ def deploy(args, data):
             '--tmpfs', '/run/nano-codex:rw,size=1024m,uid=10001,gid=10001,mode=0700',
             '--tmpfs', '/tmp:rw,size=256m,mode=1777',
             '-e', f'CODEX_PROMPT_WORKERS={prompt_workers}', '-e', f'CODEX_IMAGE_WORKERS={codex_images}',
-            '-e', 'CODEX_MAX_PENDING=32',
+            '-e', 'CODEX_MAX_PENDING=32', '-e', 'CODEX_MULTIUSER=1',
             '-v', f'{auth}:/var/lib/nano-codex', '-v', f'{token}:/run/secrets/codex-bridge-token:ro', bridge_image)
         run('docker', 'start', manifest['bridge'])
         wait_health(manifest['bridge'], "import json,urllib.request,pathlib; t=pathlib.Path('/run/secrets/codex-bridge-token').read_text().strip(); r=urllib.request.Request('http://127.0.0.1:8787/health',headers={'Authorization':'Bearer '+t}); assert json.load(urllib.request.urlopen(r,timeout=3))['ok']")
@@ -291,6 +297,9 @@ def deploy(args, data):
                '--restart', 'unless-stopped', '--network', networks[0] if networks else network,
                '-e', f'CODEX_BRIDGE_URL=http://{manifest["bridge"]}:8787',
                '-e', 'CODEX_BRIDGE_TOKEN_FILE=/run/secrets/codex-bridge-token',
+               '-e', 'NANO_MULTIUSER=1', '-e', 'NANO_ADMIN_TOKEN_FILE=/run/secrets/nano-admin-token',
+               '--tmpfs', '/run/nano-web-sessions:rw,size=256m,mode=0700',
+               '-v', f'{admin_token}:/run/secrets/nano-admin-token:ro',
                '-e', f'IMAGE_TASK_WORKERS={image_workers}', '-e', f'IMAGE_TASK_MAX_PENDING={pending}',
                '-e', 'IMAGE_TASK_TTL_SECONDS=1800', '-e', f'WEB_THREADS={threads}', '-e', 'WEB_TIMEOUT=180',
                '-v', f'{data}/config:/app/src/config', '-v', f'{data}/presets:/app/src/presets',
@@ -304,7 +313,7 @@ def deploy(args, data):
                 run('docker', 'network', 'connect', name, args.container)
                 attached.add(name)
         run('docker', 'start', args.container)
-        result = wait_health(args.container, "import json,urllib.request; u='http://127.0.0.1:5000'; c=json.load(urllib.request.urlopen(u+'/api/config',timeout=3)); assert 'chat_engine' in c; d=json.load(urllib.request.urlopen(u+'/api/generate-image/capacity',timeout=3)); assert d['workers']>0; print(json.dumps(d))")
+        result = wait_health(args.container, "import json,urllib.request; u='http://127.0.0.1:5000'; d=json.load(urllib.request.urlopen(u+'/api/health',timeout=3)); assert d['multiuser'] and d['workers']>0; print(json.dumps(d))")
         run('docker', 'exec', args.container, 'python', '-c', "from nano_banana.core.codex_client import CodexBridge; b=CodexBridge(); assert b.request('GET','/health')['ok']; b.close()")
         save_json(data / 'deployment.json', {**manifest, 'commit': sha, 'source': str(source),
                     'web_image': web_image, 'bridge_image': bridge_image, 'backup': str(backup)})
@@ -316,7 +325,8 @@ def deploy(args, data):
         note(f'更新成功：{sha}\n运行源码：{source}\n任务容量：{result}\n备份：{backup}')
         print(f'登录：sudo python3 {Path(__file__).resolve()} --data {data} --login-only')
         print(f'回滚：sudo python3 {Path(__file__).resolve()} --rollback {backup}')
-        print('浏览器 Ctrl+Shift+R；原 API 配置保留。Codex 必须登录后手动选择，不自动切换。')
+        print('浏览器 Ctrl+Shift+R → 我的 Codex → 个人设备授权。原配置仅管理员可见。')
+        print(f'管理员密钥只在服务器查看：cat {admin_token}')
     except BaseException:
         note('更新失败，恢复旧容器及原数据')
         try:

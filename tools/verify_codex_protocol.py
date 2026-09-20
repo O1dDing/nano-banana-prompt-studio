@@ -36,6 +36,10 @@ def main():
                 "interrupt": "TurnInterruptParams.json" in files,
                 "image_generation": '"imageGeneration"' in all_text,
                 "image_parameter_control": "prompt_hints_only", "transport": "stdio"}
+        caps['device_code_auth'] = all(key in all_text for key in (
+            '"chatgptDeviceCode"', '"verificationUrl"', '"userCode"', '"loginId"'))
+        if not caps['device_code_auth']:
+            raise RuntimeError('此 Codex 版本没有正式设备码协议，拒绝部署多用户授权')
         if not caps["interrupt"]:
             raise RuntimeError("Codex 不支持中断任务")
         output.write_text(json.dumps(caps, indent=2) + "\n")

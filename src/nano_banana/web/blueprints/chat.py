@@ -68,6 +68,10 @@ def _iter_stage1_sse(
 
 def _sse_from_messages(messages: list[dict[str, Any]], current_data=None):
     chat = config_manager.get_chat_config()
+    from nano_banana.web.user_sessions import codex_identity, current_scope
+    chat['_codex_identity'] = codex_identity()
+    scope = current_scope()
+    chat['_cancelled'] = scope.closed if scope else None
     if chat.get("engine") == "codex":
         current = None
         if isinstance(current_data, str):

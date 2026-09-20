@@ -99,7 +99,7 @@ class JobManager:
                 elif job["status"] not in FINAL and now - job["leased"] > 120:
                     job["cancel"].set()
 
-    def submit(self, payload):
+    def submit(self, payload, owner=None):
         validate_payload(payload)
         self.cleanup()
         with self.lock:
@@ -109,11 +109,13 @@ class JobManager:
             finals = sorted((j for j in self.jobs.values() if j["status"] in FINAL), key=lambda j: j["updated"])
             for job in finals[:max(0, len(finals) - self.max_pending + 1)]:
                 self.jobs.pop(job["id"], None)
+            if owner is not None and sum(j.get('owner') == owner and j['status'] not in FINAL for j in self.jobs.values()) >= 8:
+                raise OverflowError('当前用户已有8个未完成任务，请等待或取消后再试')
             key = uuid.uuid4().hex
             now = time.monotonic()
             job = {"id": key, "status": "queued", "progress": {"status": "queued"},
                    "result": None, "error": None, "cancel": threading.Event(),
-                   "updated": now, "leased": now, "future": None}
+                   "updated": now, "leased": now, "future": None, "owner": owner}
             self.jobs[key] = job
             job["future"] = self.pools[payload["kind"]].submit(self._execute, key, payload)
             return self._snapshot(job)
@@ -131,7 +133,10 @@ class JobManager:
                     self.jobs[key]["progress"].update(value)
                     self.jobs[key]["updated"] = time.monotonic()
         try:
-            result = self.runner(payload, job["cancel"], progress)
+            if job.get('owner') is None:
+                result = self.runner(payload, job["cancel"], progress)
+            else:
+                result = self.runner(payload, job["cancel"], progress, owner=job['owner'])
             with self.lock:
                 if key in self.jobs:
                     job.update(status="cancelled" if job["cancel"].is_set() else "completed",
@@ -154,18 +159,18 @@ class JobManager:
         return {"task_id": job["id"], "status": job["status"],
                 "progress": dict(job["progress"]), "result": job["result"], "error": job["error"]}
 
-    def get(self, key):
+    def get(self, key, owner=None):
         with self.lock:
             job = self.jobs.get(key)
-            if job:
+            if job and job.get("owner") == owner:
                 job["leased"] = time.monotonic()
                 return self._snapshot(job)
         return None
 
-    def cancel(self, key, forget=False):
+    def cancel(self, key, forget=False, owner=None):
         with self.lock:
             job = self.jobs.get(key)
-            if not job:
+            if not job or job.get("owner") != owner:
                 return None
             job["cancel"].set()
             if job["future"] and job["future"].cancel():
@@ -174,6 +179,14 @@ class JobManager:
             if forget and job["status"] in FINAL:
                 self.jobs.pop(key, None)
             return result
+
+    def cancel_owner(self, owner):
+        with self.lock:
+            for key, job in list(self.jobs.items()):
+                if job.get('owner') == owner:
+                    self.cancel(key, forget=True, owner=owner)
+                    job['result'] = None
+                    job['progress'].pop('preview', None)
 
     def close(self):
         self.closed.set()
@@ -277,7 +290,11 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     token = Path(os.environ["CODEX_BRIDGE_TOKEN_FILE"]).read_text().strip()
-    server = BridgeServer(("0.0.0.0", int(os.getenv("CODEX_BRIDGE_PORT", "8787"))), token)
+    server_type = BridgeServer
+    if os.getenv('CODEX_MULTIUSER', '0') == '1':
+        from nano_banana.codex_bridge.multiuser import MultiuserBridge
+        server_type = MultiuserBridge
+    server = server_type(("0.0.0.0", int(os.getenv("CODEX_BRIDGE_PORT", "8787"))), token)
     def stop(*_):
         threading.Thread(target=server.shutdown, daemon=True).start()
     signal.signal(signal.SIGTERM, stop)

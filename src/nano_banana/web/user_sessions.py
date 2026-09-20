@@ -150,6 +150,11 @@ def _response(data, status=200):
 
 
 def install(app):
+    @app.get('/api/health')
+    def health():
+        from nano_banana.web.image_tasks import image_task_manager
+        return _response({'ok': True, 'multiuser': enabled(), 'workers': image_task_manager.max_workers})
+
     @app.get('/api/session/info')
     def session_info():
         return _response({'enabled': enabled(), 'heartbeat_seconds': 30, 'lease_seconds': 90,
@@ -180,7 +185,7 @@ def install(app):
                 return _response({'error': '跨站请求被拒绝'}, 403)
         if request.headers.get('Sec-Fetch-Site') == 'cross-site':
             return _response({'error': '跨站请求被拒绝'}, 403)
-        if request.path in {'/api/session/info', '/api/session/open'}:
+        if request.path in {'/api/health', '/api/session/info', '/api/session/open'}:
             return
         token = request.headers.get('X-Nano-Session', '')
         lease = manager.leases.get(token)
@@ -224,6 +229,11 @@ def install(app):
 
     @app.after_request
     def no_cache(response):
+        scope = getattr(g, 'nano_scope', None)
+        lease = getattr(g, 'nano_lease', None)
+        if (scope is not None and lease is not None and manager.leases.is_expired(lease)
+                and request.path != '/api/session/current'):
+            response = _response({'error': '会话已失效', 'session_expired': True}, 401)
         if request.path.startswith('/api/'):
             response.headers['Cache-Control'] = 'no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'

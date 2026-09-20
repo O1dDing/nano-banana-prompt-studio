@@ -34,10 +34,11 @@ class CodexImageProvider:
     provider = "codex_images"
     CAPABILITIES = capabilities()
 
-    def __init__(self, *, model=CODEX_IMAGE_MODEL, codex_model="", codex_effort="auto"):
+    def __init__(self, *, model=CODEX_IMAGE_MODEL, codex_model="", codex_effort="auto", codex_identity=None):
         if model != CODEX_IMAGE_MODEL:
             raise ValueError("Codex 内置生图不能指定 Image 2.5 或其他 Image 模型；请选择 OpenAI Images API")
         self.model, self.codex_model, self.codex_effort = model, codex_model, codex_effort
+        self.codex_identity = codex_identity
         self.options = {}
         self.generated_images = []
         self.result_metadata = {}
@@ -61,7 +62,7 @@ class CodexImageProvider:
                        "reference image identity, composition and requested edits:\n" + text)
         parts = [{"type": "image_url", "image_url": {"url": encode_image_reference(path)}} for path in images or []]
         parts.append({"type": "text", "text": instruction})
-        bridge = CodexBridge()
+        bridge = CodexBridge(identity=self.codex_identity)
         events = bridge.iter_job({"kind": "image", "messages": [{"role": "user", "content": parts}],
                                  "model": self.codex_model, "effort": self.codex_effort,
                                  "web_search_mode": "disabled"}, self.cancelled)

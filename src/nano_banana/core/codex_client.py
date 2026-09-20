@@ -16,7 +16,13 @@ class BridgeError(RuntimeError):
 
 
 class CodexBridge:
-    def __init__(self):
+    def __init__(self, identity=None):
+        if identity is None:
+            try:
+                from nano_banana.web.user_sessions import codex_identity
+                identity = codex_identity()
+            except ImportError:
+                pass
         self.base = os.getenv("CODEX_BRIDGE_URL", "").rstrip("/")
         parsed = urlparse(self.base)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
@@ -28,8 +34,12 @@ class CodexBridge:
             raise BridgeError("无法读取 Codex Bridge 凭证文件") from exc
         if len(self.token) < 32:
             raise BridgeError("Codex Bridge 访问凭证未配置")
-        self.client = httpx.Client(timeout=httpx.Timeout(90, connect=5), trust_env=False,
-                                   headers={"Authorization": "Bearer " + self.token})
+        headers = {"Authorization": "Bearer " + self.token}
+        if identity == 'owner':
+            headers['X-Codex-Owner'] = '1'
+        elif identity:
+            headers['X-Codex-Session'] = identity
+        self.client = httpx.Client(timeout=httpx.Timeout(90, connect=5), trust_env=False, headers=headers)
 
     def request(self, method, path, payload=None, timeout=None):
         try:
@@ -92,11 +102,11 @@ def iter_prompt_sse(messages, chat, output_schema):
     events = None
     try:
         yield 'data: {"status":"started"}\n\n'
-        bridge = CodexBridge()
+        bridge = CodexBridge(identity=chat.get("_codex_identity"))
         payload = {"kind": "prompt", "messages": messages,
                    "model": chat.get("codex_model", ""), "effort": chat.get("codex_effort") or "auto",
                    "web_search_mode": chat.get("web_search_mode") or "auto", "output_schema": output_schema}
-        events = bridge.iter_job(payload)
+        events = bridge.iter_job(payload, chat.get("_cancelled"))
         preview = None
         for item in events:
             progress = item.get("progress") or {}

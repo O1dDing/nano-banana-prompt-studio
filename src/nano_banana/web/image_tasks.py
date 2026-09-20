@@ -30,16 +30,18 @@ class ImageTaskManager:
         self._lock = threading.RLock()
         self._tasks = {}
 
-    def submit(self, runner, *, provider, model, cancel_callback=None):
+    def submit(self, runner, *, provider, model, cancel_callback=None, owner=None):
         self.cleanup()
         with self._lock:
             active = sum(task["status"] not in FINAL_STATUSES for task in self._tasks.values())
             if active >= self.max_pending:
                 raise OverflowError(f"生图队列已满（上限 {self.max_pending} 个未完成任务），请稍后再试")
+            if owner is not None and sum(t.get('owner') == owner and t['status'] not in FINAL_STATUSES for t in self._tasks.values()) >= 8:
+                raise OverflowError('当前用户已有8个未完成图片任务')
             key, now = uuid.uuid4().hex, time.time()
             task = {"task_id": key, "status": "queued", "image": None, "images": [], "metadata": {},
                     "error": None, "provider": provider, "model": model, "created_at": now, "updated_at": now,
-                    "cancel_requested": False, "future": None, "cancel_callback": cancel_callback}
+                    "cancel_requested": False, "future": None, "cancel_callback": cancel_callback, "owner": owner}
             self._tasks[key] = task
             task["future"] = self._executor.submit(self._execute, key, runner)
             return self._public_snapshot(task)
@@ -84,16 +86,16 @@ class ImageTaskManager:
     def _finish_locked(self, task, status, *, image=None, error=None):
         task.update(status=status, image=image, error=error, updated_at=time.time())
 
-    def get(self, task_id):
+    def get(self, task_id, owner=None):
         self.cleanup()
         with self._lock:
             task = self._tasks.get(task_id)
-            return self._public_snapshot(task) if task else None
+            return self._public_snapshot(task) if task and task.get("owner") == owner else None
 
-    def cancel(self, task_id):
+    def cancel(self, task_id, owner=None):
         with self._lock:
             task = self._tasks.get(task_id)
-            if not task:
+            if not task or task.get("owner") != owner:
                 return None
             if task["status"] not in FINAL_STATUSES:
                 task["cancel_requested"] = True
@@ -105,6 +107,15 @@ class ImageTaskManager:
                 else:
                     task.update(status="cancelling", updated_at=time.time())
             return self._public_snapshot(task)
+
+    def cancel_owner(self, owner):
+        with self._lock:
+            for key, task in list(self._tasks.items()):
+                if task.get('owner') == owner:
+                    self.cancel(key, owner=owner)
+                    task.update(image=None, images=[], metadata={})
+                    if task['status'] in FINAL_STATUSES:
+                        self._tasks.pop(key, None)
 
     def cleanup(self):
         with self._lock:

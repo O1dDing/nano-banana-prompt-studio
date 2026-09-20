@@ -15,10 +15,29 @@ import tempfile
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable
 
 from nano_banana.core.images.artifacts import MAX_IMAGE_BYTES, image_from_bytes, image_data_url, reference_bytes
+
+_IDENTITY = ContextVar('nano_codex_identity', default=None)
+
+
+@contextmanager
+def runtime_identity(home, register=None):
+    marker = _IDENTITY.set((Path(home), register))
+    try:
+        yield
+    finally:
+        _IDENTITY.reset(marker)
+
+
+def work_root():
+    identity = _IDENTITY.get()
+    return identity[0] / 'work' if identity else Path(os.environ.get('CODEX_WORK_DIR', '/run/nano-codex'))
+
 
 MAX_EVENT_BYTES = 96 * 1024 * 1024
 MAX_TEXT = 2 * 1024 * 1024
@@ -36,6 +55,11 @@ def safe_environment() -> dict[str, str]:
     # 白名单，尤其不继承 OPENAI_API_KEY、CODEX_API_KEY 或任意上游网关设置。
     keys = {"PATH", "HOME", "CODEX_HOME", "LANG", "LC_ALL", "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR"}
     result = {key: value for key, value in os.environ.items() if key in keys}
+    identity = _IDENTITY.get()
+    if identity:
+        result['CODEX_HOME'] = str(identity[0])
+        result['HOME'] = str(identity[0])
+        result['XDG_CACHE_HOME'] = str(identity[0] / 'cache')
     result["RUST_LOG"] = "error"
     return result
 
@@ -65,6 +89,7 @@ class Rpc:
     """单任务 RPC 客户端：只使用 stdio，保留 RPC 响应之间的通知。"""
     def __init__(self, work: Path, kind: str = "prompt", search: str = "disabled"):
         self.work = work
+        self._close_lock = threading.RLock()
         self.proc = subprocess.Popen(command(work, kind, search), cwd=str(work),
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.DEVNULL, env=safe_environment(),
@@ -77,6 +102,9 @@ class Rpc:
         self.reader.start()
         self.thread_id: str | None = None
         self.turn_id: str | None = None
+        identity = _IDENTITY.get()
+        if identity and identity[1]:
+            identity[1](self)
 
     def _read(self):
         try:
@@ -164,6 +192,12 @@ class Rpc:
                 pass
 
     def close(self):
+        with self._close_lock:
+            if self.closed.is_set():
+                return
+            self._close_impl()
+
+    def _close_impl(self):
         self.closed.set()
         if self.proc.poll() is None:
             try:
@@ -200,7 +234,7 @@ def probe_status() -> dict:
     caps = protocol_capabilities()
     if not caps.get("ready"):
         return {"available": False, "logged_in": False, "protocol": caps}
-    root = Path(os.environ.get("CODEX_WORK_DIR", "/run/nano-codex"))
+    root = work_root()
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="probe-", dir=root) as directory:
         rpc = Rpc(Path(directory))
@@ -296,7 +330,7 @@ def run_job(payload: dict, cancelled: threading.Event, progress: Callable[[dict]
     mode = payload.get("web_search_mode", "auto")
     if mode not in {"disabled", "auto", "force"}:
         raise CodexError("未知联网模式")
-    root = Path(os.environ.get("CODEX_WORK_DIR", "/run/nano-codex"))
+    root = work_root()
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="task-", dir=root) as directory:
         work = Path(directory)

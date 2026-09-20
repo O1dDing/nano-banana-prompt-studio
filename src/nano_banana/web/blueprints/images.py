@@ -16,6 +16,7 @@ from nano_banana.core.images.gpt_options import normalize_options
 from nano_banana.web.providers import WEB_PROVIDER_META as IMAGE_PROVIDER_META
 from nano_banana.web.context import config_manager
 from nano_banana.web.image_tasks import image_task_manager
+from nano_banana.web.user_sessions import current_scope, owner_key, codex_identity
 
 bp = Blueprint("images", __name__)
 
@@ -99,10 +100,13 @@ def _decode_reference_images(images: list[Any], directory: str):
 def _run_image_generation(*, prompt, images, provider, credentials, model, options, cancelled=None):
     # 即使第二张图片损坏，第一张临时文件也一定回收。
     with tempfile.TemporaryDirectory(prefix="nano-reference-") as directory:
+        if cancelled is not None and cancelled.is_set():
+            raise RuntimeError('会话或任务已取消，未发出生成请求')
         processed = _decode_reference_images(images, directory)
         if provider == "codex_images":
             client = CodexImageProvider(model=model, codex_model=credentials.get("codex_model", ""),
-                                        codex_effort=credentials.get("codex_effort") or "auto")
+                                        codex_effort=credentials.get("codex_effort") or "auto",
+                                        codex_identity=credentials.get("codex_identity"))
             if cancelled is not None:
                 client.cancelled = cancelled
         else:
@@ -146,7 +150,7 @@ def generate_image():
             raise ValueError("生成参数必须是 JSON 对象")
         if provider == "codex_images":
             cfg = config_manager.load_config()
-            credentials = {"codex_model": cfg.get("codex_model", ""), "codex_effort": cfg.get("codex_effort") or "auto"}
+            credentials = {"codex_model": cfg.get("codex_model", ""), "codex_effort": cfg.get("codex_effort") or "auto", "codex_identity": codex_identity()}
             model = data.get("model") or "gpt-image-2"
             if model != "gpt-image-2":
                 raise ValueError("Codex Image 不支持指定 Image 2.5；请改用 API 渠道")
@@ -173,7 +177,7 @@ def generate_image():
         snapshot = {"prompt": prompt, "images": list(images), "provider": provider,
                     "credentials": credentials, "model": model, "options": deepcopy(options), "cancelled": cancelled}
         task = image_task_manager.submit(lambda: _run_image_generation(**snapshot), provider=provider, model=model,
-                                         cancel_callback=cancelled.set if provider == "codex_images" else None)
+                                         cancel_callback=cancelled.set, owner=owner_key())
         response = jsonify({"task_id": task["task_id"], "status": task["status"]})
         response.status_code = 202
         response.headers["Cache-Control"] = "no-store"
@@ -188,7 +192,7 @@ def generate_image():
 
 @bp.get("/api/generate-image/status/<task_id>")
 def get_image_task_status(task_id):
-    task = image_task_manager.get(task_id)
+    task = image_task_manager.get(task_id, owner=owner_key())
     if not task:
         return jsonify({"error": "任务不存在或已过期"}), 404
     response = jsonify(task)
@@ -198,7 +202,7 @@ def get_image_task_status(task_id):
 
 @bp.post("/api/generate-image/cancel/<task_id>")
 def cancel_image_task(task_id):
-    task = image_task_manager.cancel(task_id)
+    task = image_task_manager.cancel(task_id, owner=owner_key())
     if not task:
         return jsonify({"error": "任务不存在或已过期"}), 404
     response = jsonify(task)

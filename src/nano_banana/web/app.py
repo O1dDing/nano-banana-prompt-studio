@@ -17,7 +17,10 @@ def _static_dir() -> Path:
 def create_app() -> Flask:
     static_dir = _static_dir()
     app = Flask(__name__, static_folder=str(static_dir), static_url_path="/static")
-    CORS(app)
+    from nano_banana.web.user_sessions import install, enabled
+    if not enabled():
+        CORS(app)
+    install(app)
     app.register_blueprint(config.bp)
     app.register_blueprint(presets.bp)
     app.register_blueprint(chat.bp)

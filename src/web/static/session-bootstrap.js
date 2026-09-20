@@ -30,6 +30,7 @@
         sessionStorage.removeItem(KEY);
         stopHeartbeats(); clearTimeout(loginTimer);
         authCode = '';
+        if (typeof state !== 'undefined') state.codexModels = [];
         const code = document.getElementById('nanoDeviceCode');
         if (code) code.textContent = '';
         document.querySelectorAll('input[type="password"]').forEach(el => {el.value = '';});
@@ -230,5 +231,5 @@
     });
     document.addEventListener('visibilitychange', () => {if (!document.hidden && active) void beat();});
     window.addEventListener('pageshow', () => {if (active && token) {startHeartbeats(); void beat();}});
-    window.addEventListener('pagehide', () => {stopHeartbeats();}); // 不注销：刷新也会触发 pagehide。
+    window.addEventListener('pagehide', () => {stopHeartbeats(); clearTimeout(loginTimer);}); // 不注销：刷新也会触发 pagehide。
 })();

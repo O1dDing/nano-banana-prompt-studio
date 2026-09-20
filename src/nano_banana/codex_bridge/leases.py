@@ -40,6 +40,7 @@ class Leases:
         self.dispose = dispose or (lambda lease: None)
         self.lock = threading.RLock()
         self.items: dict[str, Lease] = {}
+        self.pending_disposals = {}
         self.stopped = threading.Event()
         self.thread = None
         if sweep_seconds:
@@ -86,7 +87,11 @@ class Leases:
             lease = self.items.pop(key, None)
         if lease is not None:
             lease.closed.set()
-            self.dispose(lease)
+            try:
+                self.dispose(lease)
+            except Exception:
+                with self.lock:
+                    self.pending_disposals[key] = lease
 
     def expire(self, token):
         self.expire_key(digest(token))
@@ -96,6 +101,15 @@ class Leases:
             keys = [key for key, lease in self.items.items() if self.is_expired(lease)]
         for key in keys:
             self.expire_key(key)
+        with self.lock:
+            pending = list(self.pending_disposals.items())
+        for key, lease in pending:
+            try:
+                self.dispose(lease)
+            except Exception:
+                continue
+            with self.lock:
+                self.pending_disposals.pop(key, None)
 
     def _loop(self, interval):
         while not self.stopped.wait(interval):

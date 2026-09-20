@@ -12,8 +12,8 @@ class YamlHandler:
         "反向提示词标签": ["水印、签名、文字"],
     }
 
-    def __init__(self):
-        self.config_path = get_config_path()
+    def __init__(self, config_path=None):
+        self.config_path = Path(config_path) if config_path is not None else get_config_path()
         self._ensure_config_exists()
 
     def _ensure_config_exists(self):

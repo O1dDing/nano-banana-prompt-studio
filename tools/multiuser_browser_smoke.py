@@ -104,7 +104,8 @@ def main():
             a.evaluate("fetch('/api/config').catch(() => {})")
             a.wait_for_function("sessionStorage.getItem('nano.private.tab.v1') === null")
             assert b.evaluate('(key) => sessionStorage.getItem(key)', key) == tb
-            assert all(token for path, token in calls if path not in {'/api/session/info', '/api/session/open'})
+            missing = [path for path, token in calls if not token and path not in {'/api/session/info', '/api/session/open'}]
+            assert missing == [], missing
             assert not errors, errors
             browser.close()
             print('Multiuser browser PASS: own code, own token, refresh, duplicate tab, expiry')

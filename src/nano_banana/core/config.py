@@ -80,6 +80,9 @@ def nest_config(flat: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+from pathlib import Path
+
+
 class AIConfigManager:
     """管理AI API配置的保存和加载"""
     
@@ -107,9 +110,9 @@ class AIConfigManager:
         "image_generation_options": {},
     }
     
-    def __init__(self):
+    def __init__(self, config_path=None):
         self._config_lock = threading.RLock()
-        self.config_path = get_resource_path("config/ai_config.yaml")
+        self.config_path = Path(config_path) if config_path is not None else get_resource_path("config/ai_config.yaml")
         self._ensure_config_exists()
     
     def _ensure_config_exists(self):

@@ -611,3 +611,14 @@ select.select-input, .codex-model-trigger {
     color: var(--text-tertiary);
     opacity: 1;
 }
+
+/* Per-tab identity; device codes are rendered as text, never as HTML. */
+#nanoSessionModal { z-index: 1800; }
+.nano-auth-body { display: grid; gap: 14px; }
+.nano-auth-body p { margin: 0; color: var(--text-secondary); }
+.nano-auth-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+#nanoDeviceCode { display: block; font-size: 28px; letter-spacing: .1em; user-select: all; margin: 12px 0; overflow-wrap: anywhere; }
+#nanoSessionStatus[data-state="success"] { color: var(--success); }
+#nanoSessionStatus[data-state="error"] { color: var(--error-color); }
+.nano-auth-body details input { margin: 10px 0; }
+#nanoAccountBtn { flex-shrink: 0; }
