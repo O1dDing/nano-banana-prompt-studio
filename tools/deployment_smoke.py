@@ -6,7 +6,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,6 +18,11 @@ def run(*args, capture=False, check=True):
 
 def main():
     assert os.geteuid() == 0
+    # CI checkout is owned by runner; trust only this known checkout for this
+    # test process and its children, without changing global Git configuration.
+    os.environ['GIT_CONFIG_COUNT'] = '1'
+    os.environ['GIT_CONFIG_KEY_0'] = 'safe.directory'
+    os.environ['GIT_CONFIG_VALUE_0'] = str(ROOT)
     root = Path(tempfile.mkdtemp(prefix='nano-deployment-test-'))
     data = root / 'data'
     app = root / 'user-checkout'
@@ -72,8 +76,9 @@ def main():
         assert 'OPENAI_API_KEY' not in '\n'.join(bridge['Config']['Env'])
         run('docker', 'exec', name, 'python', '-c',
             'from nano_banana.core.config import AIConfigManager; '
-            'c=AIConfigManager().load_config(); assert c["api_key"]=="dummy-test-not-a-real-key"; '
-            'assert c["chat_engine"]=="api"')
+            'm=AIConfigManager(); c=m.load_config(); '
+            'assert c["api_key"]=="dummy-test-not-a-real-key"; '
+            'assert m.get_chat_config()["engine"]=="api"')
         run(sys.executable, ROOT / 'deploy/update_nano_banana_codex.py', '--rollback', state['backup'])
         assert (data / 'config/ai_config.yaml').is_dir()
         assert (data / 'config/ai_config.yaml/old-directory-marker').is_file()
