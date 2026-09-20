@@ -63,6 +63,9 @@ def test_queue_capacity_and_payload_reject(monkeypatch):
     try:
         manager.submit(payload())
         with pytest.raises(OverflowError):manager.submit(payload())
+        assert validate_payload({**payload(),'effort':'max'})['effort'] == 'max'
+        assert validate_payload({**payload(),'effort':'none'})['effort'] == 'none'
+        with pytest.raises(ValueError):validate_payload({**payload(),'effort':'ultra'})
         with pytest.raises(ValueError):validate_payload({**payload(),'command':'rm'})
         with pytest.raises(ValueError):validate_payload({'kind':'prompt','messages':payload()['messages'],'output_schema':{'$ref':'https://bad.invalid'}})
     finally:manager.close()
