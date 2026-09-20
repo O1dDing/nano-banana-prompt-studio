@@ -209,8 +209,11 @@ def probe_status() -> dict:
             account = subscription_account(rpc)
             models = rpc.call("model/list", {}, timeout=30).get("data") or []
             safe_models = [{"model": item.get("model") or item.get("id"),
-                            "displayName": item.get("displayName"), "isDefault": item.get("isDefault", False),
-                            "supportedReasoningEfforts": item.get("supportedReasoningEfforts") or []}
+                            "displayName": item.get("displayName"),
+                            "isDefault": item.get("isDefault", False),
+                            "defaultReasoningEffort": item.get("defaultReasoningEffort"),
+                            "supportedReasoningEfforts": item.get("supportedReasoningEfforts") or [],
+                            "inputModalities": item.get("inputModalities") or ["text", "image"]}
                            for item in models if isinstance(item, dict)]
             return {"available": True, "logged_in": True, "billing": "codex_subscription",
                     "account": account, "models": safe_models, "protocol": caps,
@@ -327,7 +330,7 @@ def run_job(payload: dict, cancelled: threading.Event, progress: Callable[[dict]
             turn_params: dict[str, Any] = {"threadId": rpc.thread_id, "input": inputs}
             effort = payload.get("effort")
             if effort and effort != "auto":
-                if effort not in {"minimal", "low", "medium", "high", "xhigh"}:
+                if effort not in {"none", "minimal", "low", "medium", "high", "xhigh", "max"}:
                     raise CodexError("不支持的 reasoning effort")
                 turn_params["effort"] = effort
             if kind == "prompt":
