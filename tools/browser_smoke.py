@@ -50,6 +50,7 @@ def main():
     Image.new('RGB', (64, 64), 'white').save(image, 'WEBP')
     image_url = 'data:image/webp;base64,' + base64.b64encode(image.getvalue()).decode()
     jobs, cancelled, errors = {}, [], []
+    codex_logged_in = {'value': True}
     def api(route):
         path = route.request.url.split(origin, 1)[-1]
         method = route.request.method
@@ -66,7 +67,9 @@ def main():
         elif path == '/api/image-providers':
             data = providers
         elif path == '/api/codex/status':
-            data = {'logged_in': True, 'image_available': True,
+            data = {'logged_in': codex_logged_in['value'],
+                    'error': None if codex_logged_in['value'] else 'fixture not logged in',
+                    'image_available': True,
                     'prompt_workers': 4, 'image_workers': 4,
                     'models': [
                         {'model': 'gpt-6-astra', 'displayName': 'GPT-6-Astra', 'isDefault': True,
@@ -127,7 +130,22 @@ def main():
             a.locator('#configChatEngine').select_option('codex')
             assert a.locator('#configApiKey').is_hidden()
             a.locator('#refreshCodexStatus').click()
-            a.wait_for_function("document.getElementById('codexStatus').textContent.includes('已登录')")
+            a.wait_for_function("document.getElementById('codexStatus').textContent === 'ChatGPT 已登录'")
+            assert a.locator('#codexStatus').evaluate("el => el.classList.contains('is-success')")
+            assert 'Prompt' not in a.locator('#codexStatus').inner_text()
+            assert a.locator('#configOpenAIImageModel').get_attribute('list') is None
+            assert a.locator('#openaiImageModelToggle').count() == 1
+            a.locator('#openaiImageModelToggle').click()
+            a.wait_for_selector('#openaiImageModelOptions:not([hidden])')
+            assert a.locator('.openai-image-model-option[data-model-id="gpt-image-2.5-sunburst"]').count() == 1
+            a.locator('#openaiImageModelToggle').click()
+            codex_logged_in['value'] = False
+            a.locator('#refreshCodexStatus').click()
+            a.wait_for_function("document.getElementById('codexStatus').textContent === 'ChatGPT 未登录'")
+            assert a.locator('#codexStatus').evaluate("el => el.classList.contains('is-error')")
+            codex_logged_in['value'] = True
+            a.locator('#refreshCodexStatus').click()
+            a.wait_for_function("document.getElementById('codexStatus').textContent === 'ChatGPT 已登录'")
             a.locator('#configCodexModelButton').click()
             a.wait_for_selector('#codexModelOptions:not([hidden])')
             astra = a.locator('.codex-model-option[data-model-id="gpt-6-astra"]')
