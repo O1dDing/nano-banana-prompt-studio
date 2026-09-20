@@ -503,6 +503,7 @@ function updateJsonPreview() {
 // Init
 // ========================================
 function init() {
+    initCodexControls();
     const start = () => {
     Promise.all([loadImageProviders(), loadConfig()])
         .then(() => renderImageGenerationControls())

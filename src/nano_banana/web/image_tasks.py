@@ -1,33 +1,18 @@
-"""进程内异步生图任务管理器。
-
-单进程内由线程池执行耗时的上游图片请求，HTTP 提交与状态轮询保持短连接，
-避免 Cloudflare 524。多个浏览器标签页通过独立 task_id 并发使用。
-"""
+"""单进程线程池图片任务，支持 Codex 中断和多图片返回。"""
 from __future__ import annotations
 
 import os
 import threading
 import time
 import uuid
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from typing import Any, Callable
-
 
 FINAL_STATUSES = {"completed", "failed", "cancelled"}
-PUBLIC_TASK_KEYS = {
-    "task_id",
-    "status",
-    "image",
-    "error",
-    "provider",
-    "model",
-    "created_at",
-    "updated_at",
-}
+PUBLIC_TASK_KEYS = {"task_id", "status", "image", "images", "metadata", "error", "provider", "model", "created_at", "updated_at"}
 
 
-def _bounded_env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+def _bounded_env_int(name, default, minimum, maximum):
     try:
         value = int(os.getenv(name, str(default)))
     except (TypeError, ValueError):
@@ -36,148 +21,103 @@ def _bounded_env_int(name: str, default: int, minimum: int, maximum: int) -> int
 
 
 class ImageTaskManager:
-    """线程安全、带 TTL 与取消标记的进程内任务队列。"""
-
-    def __init__(self) -> None:
-        self.max_workers = _bounded_env_int("IMAGE_TASK_WORKERS", 4, 1, 16)
+    def __init__(self):
+        self.max_workers = _bounded_env_int("IMAGE_TASK_WORKERS", 4, 1, 32)
         self.max_pending = _bounded_env_int("IMAGE_TASK_MAX_PENDING", 32, 1, 256)
-        self.ttl_seconds = _bounded_env_int(
-            "IMAGE_TASK_TTL_SECONDS", 1800, 60, 86400
-        )
-        self._executor = ThreadPoolExecutor(
-            max_workers=self.max_workers,
-            thread_name_prefix="nano-image",
-        )
+        self.ttl_seconds = _bounded_env_int("IMAGE_TASK_TTL_SECONDS", 1800, 60, 86400)
+        self.max_completed = _bounded_env_int("IMAGE_TASK_MAX_COMPLETED", 32, 1, 256)
+        self._executor = ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix="nano-image")
         self._lock = threading.RLock()
-        self._tasks: dict[str, dict[str, Any]] = {}
+        self._tasks = {}
 
-    def submit(
-        self,
-        runner: Callable[[], str],
-        *,
-        provider: str,
-        model: str,
-    ) -> dict[str, Any]:
+    def submit(self, runner, *, provider, model, cancel_callback=None):
         self.cleanup()
         with self._lock:
-            active = sum(
-                1
-                for task in self._tasks.values()
-                if task.get("status") not in FINAL_STATUSES
-            )
+            active = sum(task["status"] not in FINAL_STATUSES for task in self._tasks.values())
             if active >= self.max_pending:
-                raise RuntimeError(
-                    f"生图队列已满（上限 {self.max_pending} 个未完成任务），请稍后再试"
-                )
-
-            now = time.time()
-            task_id = uuid.uuid4().hex
-            task: dict[str, Any] = {
-                "task_id": task_id,
-                "status": "queued",
-                "image": None,
-                "error": None,
-                "provider": provider,
-                "model": model,
-                "created_at": now,
-                "updated_at": now,
-                "cancel_requested": False,
-                "future": None,
-            }
-            self._tasks[task_id] = task
-            future = self._executor.submit(self._execute, task_id, runner)
-            task["future"] = future
+                raise OverflowError(f"生图队列已满（上限 {self.max_pending} 个未完成任务），请稍后再试")
+            key, now = uuid.uuid4().hex, time.time()
+            task = {"task_id": key, "status": "queued", "image": None, "images": [], "metadata": {},
+                    "error": None, "provider": provider, "model": model, "created_at": now, "updated_at": now,
+                    "cancel_requested": False, "future": None, "cancel_callback": cancel_callback}
+            self._tasks[key] = task
+            task["future"] = self._executor.submit(self._execute, key, runner)
             return self._public_snapshot(task)
 
-    def _execute(self, task_id: str, runner: Callable[[], str]) -> None:
+    def _execute(self, key, runner):
         with self._lock:
-            task = self._tasks.get(task_id)
+            task = self._tasks.get(key)
             if not task:
                 return
-            if task.get("cancel_requested"):
+            if task["cancel_requested"]:
                 self._finish_locked(task, "cancelled")
                 return
-            task["status"] = "processing"
-            task["updated_at"] = time.time()
-
+            task.update(status="processing", updated_at=time.time())
         try:
-            image = runner()
-        except Exception as exc:  # noqa: BLE001
+            result = runner()
+            if not isinstance(result, (str, dict)):
+                raise ValueError("图片任务返回格式错误")
             with self._lock:
-                task = self._tasks.get(task_id)
+                task = self._tasks.get(key)
                 if not task:
                     return
-                if task.get("cancel_requested"):
+                if task["cancel_requested"]:
                     self._finish_locked(task, "cancelled")
                 else:
-                    self._finish_locked(task, "failed", error=str(exc))
-            return
+                    self._finish_locked(task, "completed", image=result.get("image") if isinstance(result, dict) else result)
+                    if isinstance(result, dict):
+                        task["images"] = result.get("images") or [result["image"]]
+                        task["metadata"] = result.get("metadata") or {}
+                    else:
+                        task["images"] = [result]
+        except Exception as exc:
+            with self._lock:
+                task = self._tasks.get(key)
+                if task:
+                    self._finish_locked(task, "cancelled" if task["cancel_requested"] else "failed", error=None if task["cancel_requested"] else str(exc))
+        finally:
+            with self._lock:
+                if key in self._tasks:
+                    self._tasks[key]["cancel_callback"] = None
+            self.cleanup()
 
-        with self._lock:
-            task = self._tasks.get(task_id)
-            if not task:
-                return
-            if task.get("cancel_requested"):
-                self._finish_locked(task, "cancelled")
-            else:
-                self._finish_locked(task, "completed", image=image)
+    def _finish_locked(self, task, status, *, image=None, error=None):
+        task.update(status=status, image=image, error=error, updated_at=time.time())
 
-    def _finish_locked(
-        self,
-        task: dict[str, Any],
-        status: str,
-        *,
-        image: str | None = None,
-        error: str | None = None,
-    ) -> None:
-        task["status"] = status
-        task["image"] = image
-        task["error"] = error
-        task["updated_at"] = time.time()
-
-    def get(self, task_id: str) -> dict[str, Any] | None:
+    def get(self, task_id):
         self.cleanup()
         with self._lock:
             task = self._tasks.get(task_id)
             return self._public_snapshot(task) if task else None
 
-    def cancel(self, task_id: str) -> dict[str, Any] | None:
-        self.cleanup()
+    def cancel(self, task_id):
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
                 return None
-            if task.get("status") in FINAL_STATUSES:
-                return self._public_snapshot(task)
-
-            task["cancel_requested"] = True
-            future: Future[Any] | None = task.get("future")
-            if future is not None and future.cancel():
-                self._finish_locked(task, "cancelled")
-            else:
-                # 已发送到第三方 API 的 HTTP 请求通常无法由本进程强制中断；
-                # 标记 cancelling 后，任务结束时丢弃结果并转为 cancelled。
-                task["status"] = "cancelling"
-                task["updated_at"] = time.time()
+            if task["status"] not in FINAL_STATUSES:
+                task["cancel_requested"] = True
+                callback = task.get("cancel_callback")
+                if callback:
+                    callback()  # 仅设置 Event，不执行网络 IO。
+                if task["future"] and task["future"].cancel():
+                    self._finish_locked(task, "cancelled")
+                else:
+                    task.update(status="cancelling", updated_at=time.time())
             return self._public_snapshot(task)
 
-    def cleanup(self) -> None:
-        now = time.time()
+    def cleanup(self):
         with self._lock:
-            expired = [
-                task_id
-                for task_id, task in self._tasks.items()
-                if task.get("status") in FINAL_STATUSES
-                and now - float(task.get("updated_at") or now) > self.ttl_seconds
-            ]
-            for task_id in expired:
-                self._tasks.pop(task_id, None)
+            now = time.time()
+            final = sorted((task for task in self._tasks.values() if task["status"] in FINAL_STATUSES), key=lambda task: task["updated_at"])
+            excess = max(0, len(final) - self.max_completed)
+            for index, task in enumerate(final):
+                if index < excess or now - task["updated_at"] > self.ttl_seconds:
+                    self._tasks.pop(task["task_id"], None)
 
     @staticmethod
-    def _public_snapshot(task: dict[str, Any]) -> dict[str, Any]:
-        return deepcopy(
-            {key: task.get(key) for key in PUBLIC_TASK_KEYS if key in task}
-        )
+    def _public_snapshot(task):
+        return deepcopy({key: task.get(key) for key in PUBLIC_TASK_KEYS if key in task})
 
 
 image_task_manager = ImageTaskManager()

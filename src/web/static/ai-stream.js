@@ -197,7 +197,7 @@ function openAiModal(mode) {
 
 async function handleAiExecute() {
     const prompt = elements.aiPromptInput.value.trim();
-    if (!prompt) {
+    if (!prompt && (currentAiMode !== 'generate' || aiUploadedImages.length === 0)) {
         showToast('请输入内容', 'warning');
         return;
     }
@@ -310,11 +310,16 @@ async function handleAiExecute() {
                             }
                         }
                     } else {
+                        const rawEvent = JSON.parse(dataStr);
+                        if (typeof rawEvent.codex_preview === 'string') {
+                            fullContent = rawEvent.codex_preview;
+                            elements.aiResponsePreview.value = fullContent;
+                            continue;
+                        }
                         const event = SseStream.parseSseJsonEvent(dataStr);
                         if (event.type === 'status') {
-                            if (event.status === 'thinking') {
-                                streamStatusText = thinkingStatusText;
-                            }
+                            const labels = {thinking: thinkingStatusText, queued: 'Codex 排队中', searching: 'Codex 正在联网搜索', search_completed: 'Codex 已执行搜索，正在构建 JSON'};
+                            streamStatusText = labels[event.status] || '';
                         } else if (event.type === 'content') {
                             streamStatusText = '';
                             fullContent += event.content;

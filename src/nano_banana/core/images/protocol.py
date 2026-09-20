@@ -49,6 +49,9 @@ class ImageGenerateOptions:
 
 
 def get_image_provider_capabilities(provider: str, model: str = "") -> dict[str, Any]:
+    if provider == "openai_images":
+        from nano_banana.core.images.gpt_options import capabilities
+        return capabilities(model or "gpt-image-2")
     catalog = _capabilities_catalog()
     resolved_provider = provider if provider in catalog else "gemini"
     capabilities = copy.deepcopy(catalog[resolved_provider])
