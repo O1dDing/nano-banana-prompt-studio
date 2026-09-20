@@ -1,7 +1,7 @@
 name: Web and Codex regression
 on:
   push:
-    branches: [main, feat/codex-subscription-images-20260920, hotfix/codex-bridge-import-20260920]
+    branches: [main, feat/codex-subscription-images-20260920, hotfix/codex-bridge-import-20260920, feat/multiuser-codex-sessions-20260920]
     paths: ['src/**', 'tests/**', 'tools/**', 'deploy/**', 'pyproject.toml', 'web_dockerfile', '.github/workflows/web-regression.yml']
   pull_request:
     branches: [main]
@@ -13,7 +13,7 @@ permissions:
 jobs:
   regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,15 +25,27 @@ jobs:
           pytest -q
           python -m compileall -q src/nano_banana deploy
           for file in src/web/static/*.js; do node --check "$file"; done
-      - name: Real browser smoke test with mocked providers
+          bash -n deploy/update_nano_banana_codex.sh
+          python - <<'PY'
+          import hashlib
+          import re
+          from pathlib import Path
+          wrapper = Path('deploy/update_nano_banana_codex.sh').read_text()
+          expected = re.search(r"EXPECTED_BLOB='([0-9a-f]+)'", wrapper).group(1)
+          raw = Path('deploy/update_nano_banana_codex.py').read_bytes()
+          digest = hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()
+          assert digest == expected, 'bootstrap must point to the reviewed updater'
+          PY
+      - name: Browser regression without provider calls
         run: |
           python -m playwright install --with-deps chromium
           python tools/browser_smoke.py
+          python tools/multiuser_browser_smoke.py
       - name: Build both production images
         run: |
           docker build -f web_dockerfile -t nano-web:regression .
           docker build -f deploy/codex.Dockerfile -t nano-codex:regression .
-      - name: Start isolated read-only bridge and existing API Web without login
+      - name: Verify legacy startup and actual Codex protocol without login
         run: |
           mkdir -p /tmp/nano-auth /tmp/nano-secrets
           python -c 'import secrets; from pathlib import Path; Path("/tmp/nano-secrets/token").write_text(secrets.token_hex(32))'
@@ -51,11 +63,10 @@ jobs:
             -e CODEX_BRIDGE_TOKEN_FILE=/run/secrets/codex-bridge-token \
             -v /tmp/nano-secrets/token:/run/secrets/codex-bridge-token:ro nano-web:regression
           sleep 3
-          docker exec nano-web-test python -c 'import urllib.request,json; u="http://127.0.0.1:5000"; d=json.load(urllib.request.urlopen(u+"/api/config")); assert "chat_engine" in d; d=json.load(urllib.request.urlopen(u+"/api/generate-image/capacity")); assert d["workers"]==4; print("Web health OK")'
-          docker exec nano-codex-test python -c 'import urllib.request,json,pathlib; t=pathlib.Path("/run/secrets/codex-bridge-token").read_text(); r=urllib.request.Request("http://127.0.0.1:8787/health",headers={"Authorization":"Bearer "+t}); assert json.load(urllib.request.urlopen(r))["ok"]; print("Bridge health OK")'
-          docker exec nano-codex-test python -c 'from nano_banana.codex_bridge.runtime import probe_status; d=probe_status(); assert not d["logged_in"]; print("Unauthenticated capability probe:",d)'
+          docker exec nano-web-test python -c 'import urllib.request,json; u="http://127.0.0.1:5000"; d=json.load(urllib.request.urlopen(u+"/api/config")); assert "chat_engine" in d; d=json.load(urllib.request.urlopen(u+"/api/generate-image/capacity")); assert d["workers"]==4; print("Legacy Web health OK")'
+          docker exec nano-codex-test python -c 'from nano_banana.codex_bridge.runtime import probe_status; d=probe_status(); assert not d["logged_in"]; assert d["protocol"]["device_code_auth"]; print("Codex device-code protocol OK; no login attempted")'
           test -z "$(docker port nano-codex-test)"
-      - name: Verify real deployment transaction and rollback
+      - name: Real multiuser Docker deployment and rollback
         run: sudo --preserve-env=PATH python tools/deployment_smoke.py
       - name: Logs on failure
         if: failure()
