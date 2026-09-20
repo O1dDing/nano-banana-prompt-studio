@@ -158,21 +158,38 @@ def main():
             a.locator('#configCodexEffort').select_option('max')
             a.locator('#saveConfigBtn').click()
             a.wait_for_function("!document.getElementById('configModal').classList.contains('active')")
+            assert a.locator('#image-option-output_compression').count() == 0
+            assert a.locator('label[for="image-option-size"]').inner_text() == '精确尺寸'
+            assert a.locator('#image-option-size').input_value() == ''
+            assert a.locator('#image-option-size').get_attribute('placeholder') == '留空 = 自动'
+            assert a.locator('label[for="image-option-aspect_ratio"]').inner_text() == '宽高比'
+            assert a.locator('label[for="image-option-image_size"]').inner_text() == '尺寸档位'
+            assert a.locator('label[for="image-option-quality"]').inner_text() == '生成质量'
+            assert a.locator('label[for="image-option-output_format"]').inner_text() == '输出格式'
+            assert a.locator('label[for="image-option-moderation"]').inner_text() == '审核强度'
+            assert a.locator('label[for="image-option-n"]').inner_text() == '每次生成张数'
             a.locator('#image-option-quality').select_option('max')
             a.locator('#image-option-size').fill('2048x1152')
             a.locator('#image-option-output_format').select_option('webp')
-            a.locator('#image-option-output_compression').fill('90')
             a.locator('#generateImageBtn').click()
             a.wait_for_selector('.generated-img')
             assert jobs['1']['body']['options']['quality'] == 'max'
             assert jobs['1']['body']['options']['size'] == '2048x1152'
             assert a.locator('.generated-img').get_attribute('src').startswith('data:image/webp;')
+            a.locator('#image-option-size').fill('')
+            a.locator('#image-option-image_size').select_option('4K')
+            a.locator('#image-option-aspect_ratio').select_option('21:9')
+            a.wait_for_function("document.getElementById('imageParameterHint').textContent === '3840x1648 · 实验性尺寸'")
+            assert a.locator('#imageParameterHint').evaluate("el => el.classList.contains('is-experimental')")
+            assert a.locator('#imageParameterHint strong').inner_text() == '实验性尺寸'
             a.locator('#image-option-size').fill('3840x3840')
             a.locator('#generateImageBtn').click()
             a.wait_for_timeout(100)
             assert len(jobs) == 1, 'invalid size was submitted'
+            assert a.locator('#imageProviderSelect option[value="codex_images"]').inner_text() == 'Codex Image'
             a.locator('#imageProviderSelect').select_option('codex_images')
             assert 'xhigh' not in a.locator('#image-option-quality').inner_text()
+            assert a.locator('#image-option-output_compression').count() == 0
             assert '2.5' not in a.locator('#imageModelSelect').inner_text()
             assert '不能' in a.locator('#imageParameterHint').inner_text()
             a.locator('#aiGenerateOpenBtn').click()
