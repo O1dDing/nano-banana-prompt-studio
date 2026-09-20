@@ -13,8 +13,8 @@ for tool in curl python3 git docker; do
 done
 
 # Only the updater is pinned; it deploys the current main unless --ref is supplied.
-SOURCE_COMMIT='32f2eeba2b87c2c353a692bfdd690bdc9c8ddef2'
-EXPECTED_BLOB='c331c48cd8784b552565f4bf58a0298c444e09bf'
+SOURCE_COMMIT='97da31f8effe04cc5950dadf7bde5d48667d5c31'
+EXPECTED_BLOB='248a911d9b4c623149d10d63c868a61c7df09766'
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 UPDATER="${SCRIPT_DIR}/update_nano_banana_codex-${SOURCE_COMMIT:0:12}.py"
 TEMP_FILE="$(mktemp "${SCRIPT_DIR}/.nano-codex-updater.XXXXXX")"
