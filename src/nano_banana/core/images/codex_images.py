@@ -17,17 +17,16 @@ CODEX_IMAGE_MODEL = "gpt-image-2"
 
 def capabilities():
     caps = api_capabilities(CODEX_IMAGE_MODEL)
-    caps.update(label="Codex Image（套餐 / 实验）", parameter_control="prompt_hints",
+    caps.update(label="Codex Image", parameter_control="prompt_hints",
                 max_reference_images=3, experimental=True,
-                notice="不单独收 API 费；消耗 Codex 额度。尺寸/质量/背景为提示性要求，非硬参数；不放大冒充。模型由 Codex 内置工具决定，不能选择 Image 2.5。格式/压缩在返回后本地编码。")
+                notice="不单独收 API 费；消耗 Codex 额度。尺寸/质量/背景为提示性要求，非硬参数；不放大冒充。模型由 Codex 内置工具决定，不能选择 Image 2.5。返回格式必要时在本地转换。")
     opts = caps["options"]
     opts.pop("moderation")
     opts.pop("n")
-    opts["quality"]["label"] = "生成质量意图（非原生参数，不能核实生效）"
-    opts["size"]["label"] = "期望像素尺寸（仅提示性，结果显示实际尺寸）"
-    opts["background"]["label"] = "背景意图（非硬参数）"
-    opts["output_format"]["label"] = "交付格式（必要时本地重新编码）"
-    opts["output_compression"]["label"] = "JPEG/WebP 本地编码质量 0～100（不是生成质量）"
+    opts["quality"]["label"] = "生成质量意图"
+    opts["size"]["label"] = "期望像素尺寸"
+    opts["background"]["label"] = "背景意图"
+    opts["output_format"]["label"] = "交付格式"
     return caps
 
 
