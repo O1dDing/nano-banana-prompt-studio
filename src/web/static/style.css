@@ -590,3 +590,24 @@ select.select-input, .codex-model-trigger {
 #imageParameterHint.is-error {
     color: var(--error-color);
 }
+
+
+/* Editable datalist controls use the same arrow artwork as select controls. */
+.select-arrow-input {
+    padding-right: 36px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Cpath d='M3 5.25 7 9l4-3.75' fill='none' stroke='%232f343b' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 11px center;
+    background-size: 14px 14px;
+}
+.select-arrow-input::-webkit-calendar-picker-indicator {
+    width: 32px;
+    height: 100%;
+    margin: 0 -7px 0 0;
+    opacity: 0;
+    cursor: pointer;
+}
+.select-arrow-input::placeholder {
+    color: var(--text-tertiary);
+    opacity: 1;
+}
