@@ -34,6 +34,24 @@ def test_gpt25_max_quality_native(model):
     assert 'xhigh' in capabilities(model)['options']['quality']['values']
 
 
+
+def test_web_capabilities_keep_native_backend_support_but_hide_compression_control():
+    opts = capabilities('gpt-image-2.5-sunburst')['options']
+    assert 'output_compression' not in opts
+    assert opts['aspect_ratio']['label'] == '宽高比'
+    assert opts['image_size']['label'] == '尺寸档位'
+    assert opts['size']['label'] == '精确尺寸'
+    assert opts['size']['default'] == ''
+    assert opts['size']['placeholder'] == '留空 = 自动'
+    assert opts['quality']['label'] == '生成质量'
+    assert opts['output_format']['label'] == '输出格式'
+    assert opts['moderation']['label'] == '审核强度'
+    assert opts['n']['label'] == '每次生成张数'
+    # Direct/API callers remain backward compatible even though the Web no longer exposes this field.
+    normalized = normalize_options({'output_format': 'webp', 'output_compression': 77},
+                                   'gpt-image-2.5-sunburst')
+    assert normalized['output_compression'] == 77
+
 def test_gpt2_does_not_advertise_gpt25_quality():
     assert 'max' not in capabilities('gpt-image-2')['options']['quality']['values']
     with pytest.raises(ValueError):
