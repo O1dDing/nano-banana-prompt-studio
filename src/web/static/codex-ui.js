@@ -14,7 +14,7 @@ function initCodexControls() {
         for (const id of ['configBaseUrl', 'configApiKey', 'configModel']) {
             document.getElementById(id).closest('.form-group').dataset.apiPrompt = 'true';
         }
-        elements.configImageProvider.add(new Option('Codex Image（套餐 / 实验）', 'codex_images'));
+        elements.configImageProvider.add(new Option('Codex Image', 'codex_images'));
         const notice = document.createElement('div');
         notice.className = 'form-group image-config-group';
         notice.dataset.providerConfig = 'codex_images';
@@ -306,7 +306,7 @@ async function refreshCodexStatus() {
         // 只读取元数据，不触发设置保存，也不改变本页已选中的 API/模型。
         await loadImageProviders();
         if (data.logged_in && !Array.from(elements.imageProviderSelect.options).some(o => o.value === 'codex_images')) {
-            elements.imageProviderSelect.add(new Option('Codex Image（套餐 / 实验）', 'codex_images'));
+            elements.imageProviderSelect.add(new Option('Codex Image', 'codex_images'));
             elements.imageProviderSelect.disabled = false;
         }
     } catch (error) {
@@ -361,17 +361,29 @@ function renderAdvancedImageOptions() {
     const hint = document.createElement('p'); hint.id = 'imageParameterHint'; hint.setAttribute('role', 'status');
     hint.style.gridColumn = '1 / -1'; target.appendChild(hint);
     function updateHints() {
-        if (inputs.output_compression) inputs.output_compression.disabled = inputs.output_format.value === 'png';
+        hint.classList.remove('is-experimental', 'is-error');
         if (!caps.size_presets) {hint.textContent = ''; return;}
         const size = inputs.size?.value.trim() || caps.size_presets[inputs.image_size?.value]?.[inputs.aspect_ratio?.value];
+        const error = imageOptionsError();
+        if (error) {
+            hint.classList.add('is-error');
+            hint.textContent = error;
+            return;
+        }
+
+        if (size && size !== 'auto') {
+            const [w, h] = size.split('x').map(Number);
+            if (w * h > 3686400) {
+                const strong = document.createElement('strong');
+                strong.textContent = '实验性尺寸';
+                hint.classList.add('is-experimental');
+                hint.replaceChildren(document.createTextNode(size + ' · '), strong);
+                return;
+            }
+        }
+
         const soft = caps.parameter_control === 'prompt_hints';
         hint.textContent = `${soft ? '期望' : '请求'}像素：${size || 'auto'}${soft ? '（不能保证；不进行放大）' : ''}`;
-        const error = imageOptionsError();
-        if (error) hint.textContent += ' · ' + error;
-        else if (size && size !== 'auto') {
-            const [w, h] = size.split('x').map(Number);
-            if (w * h > 3686400) hint.textContent += ' · 超过 2560×1440，为实验性大尺寸';
-        }
     }
     updateHints();
     updateImageGenerationAvailability();
