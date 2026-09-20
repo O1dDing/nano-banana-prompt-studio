@@ -173,3 +173,95 @@ function appendImageMetadata(container, src) {
     if (metadata.warnings?.length) detail.textContent += '\n' + metadata.warnings.join('\n');
     container.appendChild(detail);
 }
+
+
+const PROMPT_SEARCH_LABELS = {
+    disabled: '禁止联网',
+    auto: '自动联网',
+    force: '强制联网'
+};
+
+function initAiPromptBackendControls() {
+    const select = document.getElementById('aiPromptEngineSelect');
+    const settings = document.getElementById('aiPromptBackendSettings');
+    if (!select || !settings || select.dataset.bound === 'true') return;
+    select.dataset.bound = 'true';
+
+    select.addEventListener('change', async () => {
+        const requested = select.value;
+        const previous = state.config.chat_engine || 'api';
+        select.disabled = true;
+        try {
+            if (requested === 'codex') {
+                const statusResponse = await fetch('/api/codex/status', {cache: 'no-store'});
+                const status = await statusResponse.json().catch(() => ({}));
+                if (!statusResponse.ok || !status.logged_in) {
+                    throw new Error(status.error || 'Codex 尚未登录，请先在服务器完成设备授权');
+                }
+            }
+            const response = await fetch('/api/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({chat_engine: requested})
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || response.statusText);
+            await loadConfig();
+            await refreshAiPromptBackendBar({reloadConfig: false});
+            showToast(requested === 'codex' ? '提示词后端已切换到 Codex 套餐' : '提示词后端已切换到原有 API', 'success');
+        } catch (error) {
+            select.value = previous;
+            showToast('切换失败: ' + error.message, 'error');
+            await refreshAiPromptBackendBar({reloadConfig: true});
+        } finally {
+            select.disabled = false;
+        }
+    });
+
+    settings.addEventListener('click', () => {
+        elements.aiModal.classList.remove('active');
+        openConfigModal();
+    });
+}
+
+async function refreshAiPromptBackendBar({reloadConfig = true} = {}) {
+    initAiPromptBackendControls();
+    const select = document.getElementById('aiPromptEngineSelect');
+    const title = document.getElementById('aiPromptBackendTitle');
+    const meta = document.getElementById('aiPromptBackendMeta');
+    const strip = document.getElementById('aiBackendStrip');
+    if (!select || !title || !meta || !strip) return;
+
+    if (reloadConfig) await loadConfig();
+    const engine = state.config.chat_engine || 'api';
+    const searchMode = state.config.chat_web_search_mode || 'auto';
+    const searchLabel = PROMPT_SEARCH_LABELS[searchMode] || searchMode;
+    select.value = engine;
+
+    strip.classList.remove('is-api', 'is-codex', 'is-error');
+    strip.classList.add(engine === 'codex' ? 'is-codex' : 'is-api');
+
+    if (engine !== 'codex') {
+        title.textContent = '原有 API';
+        meta.textContent = `${state.config.model || '模型未配置'} · ${searchLabel}`;
+        return;
+    }
+
+    title.textContent = 'Codex 套餐';
+    const model = state.config.codex_model || '账户默认模型';
+    const effort = state.config.codex_effort || 'auto';
+    meta.textContent = `${model} · ${effort} · ${searchLabel} · 正在检查登录…`;
+    try {
+        const response = await fetch('/api/codex/status', {cache: 'no-store'});
+        const status = await response.json().catch(() => ({}));
+        if (!response.ok || !status.logged_in) {
+            strip.classList.add('is-error');
+            meta.textContent = `${model} · ${effort} · ${searchLabel} · ${status.error || 'Codex 未登录'}`;
+            return;
+        }
+        meta.textContent = `${model} · ${effort} · ${searchLabel} · ChatGPT 已登录 · Prompt ${status.prompt_workers || status.workers || '?'} 并发`;
+    } catch (error) {
+        strip.classList.add('is-error');
+        meta.textContent = `${model} · ${effort} · ${searchLabel} · 状态检查失败：${error.message}`;
+    }
+}
