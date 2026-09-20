@@ -1,0 +1,80 @@
+name: Verify Codex integration
+on:
+  push:
+    branches: [feat/codex-subscription-images-20260920]
+    paths: [.github/workflows/integrate-codex.yml]
+permissions:
+  contents: write
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Verify source transfer and unpack
+        run: |
+          python - <<'PY'
+          import base64, hashlib, io, zipfile
+          from pathlib import Path
+          corrections = {
+              'tyK8wtqPP/V/VexpwAiVnb': 'tyK8wtqPP/VexpwAiVnb',
+              'OyLKsePro/Ttvhi/tskef': 'OyLKsePro8vhi/tskef',
+              'MRavGbFffWE9': 'MRavGbffWE9',
+              '93TrZb2Aweb': '93TrZ2Aweb',
+          }
+          expected = ['11a291eb64b012157dcfe264950c9737c45ce9dcb337192b802f27a2696788f7', '0b902eaaaba156d4190275eecb8e289fbd6674bd927ae8ef8510f6a8389cb6dd', '5864efe48d9cd2dd03f4e0847121edfab68eff331fe64f5a773d2395b3a10ce1', '24ca96c342c1bfcc6b9aa5a0ad2afdf85a485c019376b401a6e85f753d875ff2', '1a148428bc2bef7604c3999424a71430de821183a65fc3263c1e5216d9e2ba6a', 'a17846922fa5f22e63c8faeaf2babce8982a81b1d67c1b4bb7e9a36e82e2d222']
+          texts=[]
+          good=True
+          for i, path in enumerate(sorted(Path('.integration').glob('part*.b64'))):
+              s=''.join(path.read_text().split())
+              for old,new in corrections.items(): s=s.replace(old,new)
+              digest=hashlib.sha256(s.encode()).hexdigest()
+              print(path.name,len(s),digest,'OK' if digest==expected[i] else 'MISMATCH')
+              if digest!=expected[i]:
+                  good=False
+                  print('BLOCK_DIGESTS',i,[(j,hashlib.sha256(s[j:j+256].encode()).hexdigest()[:12]) for j in range(0,len(s),256)])
+              texts.append(s)
+          assert len(texts)==6 and good,'Source transfer mismatch; refusing to execute'
+          raw=base64.b64decode(''.join(texts),validate=True)
+          assert hashlib.sha256(raw).hexdigest()=='bd4441a8fc4d7f84caf7274eb7c74e2bbf9959311c56b084332e160050a20dab'
+          z=zipfile.ZipFile(io.BytesIO(raw))
+          for name in z.namelist():
+              p=Path(name)
+              assert not p.is_absolute() and '..' not in p.parts
+          z.extractall('.')
+          PY
+      - name: Apply integration to existing Web
+        run: python tools/apply_codex_integration.py
+      - name: Test Python and JavaScript
+        run: |
+          pip install -e '.[web,dev]'
+          pytest -q
+          python -m compileall -q src/nano_banana
+          for file in src/web/static/*.js; do node --check "$file"; done
+      - name: Build Web and pinned Codex runtime
+        run: |
+          docker build -f web_dockerfile -t nano-web:test .
+          docker build -f deploy/codex.Dockerfile -t nano-codex:test .
+      - name: Commit verified source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests deploy pyproject.toml tools/verify_codex_protocol.py
+          git commit -m 'feat(web): 增加隔离 Codex 订阅通道与完整图片参数'
+          git push origin HEAD:feat/codex-subscription-images-20260920
+      - name: Export diagnostics
+        if: always()
+        run: |
+          mkdir -p /tmp/codex-diagnostics
+          cp -r .integration /tmp/codex-diagnostics/
+          git diff > /tmp/codex-diagnostics/working.patch
+          if [ -d src/nano_banana/codex_bridge ]; then cp -r src tests deploy tools /tmp/codex-diagnostics/; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: codex-integration-diagnostics
+          path: /tmp/codex-diagnostics
+          include-hidden-files: true
