@@ -1,7 +1,7 @@
 name: Web and Codex regression
 on:
   push:
-    branches: [main, feat/codex-subscription-images-20260920, hotfix/codex-bridge-import-20260920]
+    branches: [main, feat/codex-subscription-images-20260920, hotfix/codex-bridge-import-20260920, fix/exact-size-input-20260920]
     paths: ['src/**', 'tests/**', 'tools/**', 'deploy/**', 'pyproject.toml', 'web_dockerfile', '.github/workflows/web-regression.yml']
   pull_request:
     branches: [main]
