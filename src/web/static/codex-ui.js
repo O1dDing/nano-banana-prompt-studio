@@ -6,7 +6,7 @@ function initCodexControls() {
         box.innerHTML = '<div class="form-group"><label for="configChatEngine">提示词后端</label><select id="configChatEngine" class="select-input"><option value="api">原有 API</option><option value="codex">Codex 套餐（独立临时会话）</option></select></div>'
           + '<div class="form-group"><label>Codex 对话模型（留空使用账户默认）</label><div id="codexModelPicker" class="codex-model-picker"><input id="configCodexModel" type="hidden"><button id="configCodexModelButton" class="select-input codex-model-trigger" type="button" aria-haspopup="listbox" aria-expanded="false"><span class="codex-model-trigger-copy"><strong id="configCodexModelLabel">账户默认模型</strong><span id="configCodexModelId">留空，由 Codex 选择默认模型</span></span></button><div id="codexModelOptions" class="codex-model-menu" role="listbox" hidden></div></div></div>'
           + '<div class="form-group"><label for="configCodexEffort">Codex 推理强度</label><select id="configCodexEffort" class="select-input"><option value="auto">auto</option></select><small id="codexEffortHelp" class="muted-text">选择模型后按账户返回的能力动态更新。</small></div>'
-          + '<button id="refreshCodexStatus" class="btn btn-secondary" type="button">检查 Codex 登录/模型</button><p id="codexStatus" role="status" class="muted-text">仅私有使用；不会自动回退到收费 API。</p>';
+          + '<button id="refreshCodexStatus" class="btn btn-secondary" type="button">检查 Codex 登录/模型</button><p id="codexStatus" role="status" class="muted-text">Codex 状态未检查</p>';
         section.insertBefore(box, section.children[1]);
         document.getElementById('configChatEngine').addEventListener('change', toggleCodexSettings);
         document.getElementById('refreshCodexStatus').addEventListener('click', refreshCodexStatus);
@@ -20,14 +20,109 @@ function initCodexControls() {
         notice.dataset.providerConfig = 'codex_images';
         notice.textContent = '使用专用 Codex 容器中的 ChatGPT 登录，无需 API Key。图片模型由内置工具决定，不支持指定 Image 2.5。生成参数在主界面显示；质量/尺寸为提示性要求，格式转换为本地后处理。';
         elements.configImageProvider.closest('.config-section').appendChild(notice);
-        const models = document.createElement('datalist');
-        models.id = 'openaiImageModels';
-        for (const value of ['gpt-image-2', 'gpt-image-2.5-sunburst', 'gpt-image-2.5-flare']) models.appendChild(new Option(value, value));
-        elements.configOpenAIImageModel.setAttribute('list', models.id);
-        section.appendChild(models);
+        initOpenAIImageModelPicker();
     }
 }
 
+
+const OPENAI_IMAGE_MODEL_FALLBACKS = [
+    'gpt-image-2',
+    'gpt-image-2.5-sunburst',
+    'gpt-image-2.5-flare'
+];
+
+function openAIImageModelSuggestions() {
+    const providerModels = state.imageProviders?.openai_images?.models || [];
+    const current = elements.configOpenAIImageModel?.value?.trim()
+        || state.config.openai_image_model
+        || '';
+    return [...new Set([...providerModels, ...OPENAI_IMAGE_MODEL_FALLBACKS, current].filter(Boolean))];
+}
+
+function renderOpenAIImageModelOptions() {
+    const menu = document.getElementById('openaiImageModelOptions');
+    if (!menu) return;
+    const current = elements.configOpenAIImageModel?.value?.trim() || '';
+    menu.replaceChildren(...openAIImageModelSuggestions().map(model => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'codex-model-option openai-image-model-option';
+        button.dataset.modelId = model;
+        button.setAttribute('role', 'option');
+        button.setAttribute('aria-selected', String(model === current));
+        const label = document.createElement('strong');
+        label.textContent = model;
+        button.appendChild(label);
+        button.addEventListener('click', () => {
+            elements.configOpenAIImageModel.value = model;
+            elements.configOpenAIImageModel.dispatchEvent(new Event('input', {bubbles: true}));
+            closeOpenAIImageModelPicker();
+        });
+        return button;
+    }));
+}
+
+function closeOpenAIImageModelPicker() {
+    const picker = document.getElementById('openaiImageModelPicker');
+    const toggle = document.getElementById('openaiImageModelToggle');
+    const menu = document.getElementById('openaiImageModelOptions');
+    if (!picker || !toggle || !menu) return;
+    picker.classList.remove('is-open');
+    toggle.setAttribute('aria-expanded', 'false');
+    menu.hidden = true;
+}
+
+function initOpenAIImageModelPicker() {
+    const input = elements.configOpenAIImageModel;
+    if (!input || document.getElementById('openaiImageModelPicker')) return;
+
+    // Chromium 为 input[list] 绘制自己的 datalist 箭头，无法和 select 统一。
+    // 保留自由输入能力，但用自己的无边框箭头 + 建议菜单替代浏览器原生 indicator。
+    input.removeAttribute('list');
+    const parent = input.parentElement;
+    const picker = document.createElement('div');
+    picker.id = 'openaiImageModelPicker';
+    picker.className = 'openai-image-model-picker';
+    parent.insertBefore(picker, input);
+    picker.appendChild(input);
+    input.classList.add('openai-image-model-input');
+
+    const toggle = document.createElement('button');
+    toggle.id = 'openaiImageModelToggle';
+    toggle.type = 'button';
+    toggle.className = 'openai-image-model-toggle';
+    toggle.setAttribute('aria-label', '选择 OpenAI Images 模型');
+    toggle.setAttribute('aria-haspopup', 'listbox');
+    toggle.setAttribute('aria-expanded', 'false');
+
+    const menu = document.createElement('div');
+    menu.id = 'openaiImageModelOptions';
+    menu.className = 'codex-model-menu openai-image-model-menu';
+    menu.setAttribute('role', 'listbox');
+    menu.hidden = true;
+    picker.append(toggle, menu);
+
+    toggle.addEventListener('click', event => {
+        event.stopPropagation();
+        const opening = !picker.classList.contains('is-open');
+        closeOpenAIImageModelPicker();
+        if (opening) {
+            renderOpenAIImageModelOptions();
+            picker.classList.add('is-open');
+            toggle.setAttribute('aria-expanded', 'true');
+            menu.hidden = false;
+        }
+    });
+    input.addEventListener('input', () => {
+        if (!menu.hidden) renderOpenAIImageModelOptions();
+    });
+    input.addEventListener('keydown', event => {
+        if (event.key === 'Escape') closeOpenAIImageModelPicker();
+    });
+    document.addEventListener('click', event => {
+        if (!picker.contains(event.target)) closeOpenAIImageModelPicker();
+    });
+}
 
 function codexModelFriendlyName(modelId) {
     const value = String(modelId || '').trim();
@@ -182,16 +277,25 @@ function toggleCodexSettings() {
     // Codex 对话模型也供 Codex Image 的调度使用，始终保留配置入口。
 }
 
+function setCodexStatusState(output, stateName, message, detail = '') {
+    output.classList.remove('is-success', 'is-error', 'is-pending');
+    output.classList.add(stateName);
+    output.textContent = message;
+    output.title = detail || '';
+}
+
 async function refreshCodexStatus() {
     const output = document.getElementById('codexStatus');
-    output.textContent = '检查中（不会创建聊天或消耗模型额度）…';
+    setCodexStatusState(output, 'is-pending', '检查中…');
     try {
         const response = await fetch('/api/codex/status', {cache: 'no-store'});
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
-        output.textContent = data.logged_in
-          ? `ChatGPT 已登录 · Prompt ${data.prompt_workers || data.workers} 并发 / Image ${data.image_workers || data.workers} 并发 · 临时会话 · 图片能力仍需实际任务验证`
-          : (data.error || 'Codex 尚未部署或未登录');
+        if (data.logged_in) {
+            setCodexStatusState(output, 'is-success', 'ChatGPT 已登录');
+        } else {
+            setCodexStatusState(output, 'is-error', 'ChatGPT 未登录', data.error || '');
+        }
         state.codexModels = Array.isArray(data.models) ? data.models : [];
         renderCodexModelOptions();
         setCodexModelSelection(document.getElementById('configCodexModel').value || state.config.codex_model || '', false);
@@ -206,7 +310,7 @@ async function refreshCodexStatus() {
             elements.imageProviderSelect.disabled = false;
         }
     } catch (error) {
-        output.textContent = '检查失败：' + error.message;
+        setCodexStatusState(output, 'is-error', 'Codex 状态检查失败', error.message);
     }
 }
 
