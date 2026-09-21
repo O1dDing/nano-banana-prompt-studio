@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Debian 12 bootstrap: fetch and verify the reviewed multi-user updater.
-# Usage: sudo bash update_nano_banana_codex.sh [--login-only | --rollback DIR]
+# Debian 12: verified updater; --configure-access prompts for team/AUD/admins.
 set -Eeuo pipefail
 umask 077
 if [[ ${EUID} -ne 0 ]]; then
@@ -10,9 +9,9 @@ fi
 for tool in curl python3 git docker; do
     command -v "$tool" >/dev/null 2>&1 || { echo "缺少命令：$tool" >&2; exit 1; }
 done
-# The updater is pinned; it deploys current main unless --ref is provided.
-SOURCE_COMMIT='ba3e37432e2d868b513d7010af8d2ac3b42ce686'
-EXPECTED_BLOB='a24d2e7a9eec47756b32db1f9cb05d06d28af626'
+# Only the updater is pinned. It deploys current main unless --ref is supplied.
+SOURCE_COMMIT='5c2695ca19c0bf7ac91dd46268c9afee1cc51b92'
+EXPECTED_BLOB='206ee7713ed769b862749b60073abf1aa3e749b7'
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 UPDATER="${SCRIPT_DIR}/update_nano_banana_codex-${SOURCE_COMMIT:0:12}.py"
 TEMP_FILE="$(mktemp "${SCRIPT_DIR}/.nano-codex-updater.XXXXXX")"
@@ -29,7 +28,7 @@ actual = hashlib.sha1(b'blob ' + str(len(raw)).encode('ascii') + b'\0' + raw).he
 if actual != sys.argv[2]:
     raise SystemExit('更新器内容校验失败；未执行，也未停止旧服务。')
 compile(raw, 'update_nano_banana_codex.py', 'exec')
-print('多用户更新器版本和 Python 语法校验通过。', flush=True)
+print('Access 更新器版本和 Python 语法校验通过。', flush=True)
 PY
 mv -fT -- "$TEMP_FILE" "$UPDATER"
 chmod 600 "$UPDATER"
