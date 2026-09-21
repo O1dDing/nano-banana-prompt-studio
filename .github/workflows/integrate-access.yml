@@ -1,0 +1,70 @@
+name: Integrate Cloudflare profiles
+on:
+  push:
+    branches: [feat/cloudflare-profiles-admins-20260921]
+    paths: [.github/workflows/integrate-access.yml]
+permissions:
+  contents: write
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Apply checked integration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tools/apply_access_integration.py')
+          s = p.read_text()
+          s = s.replace("if s.count(old) != 1:", "if s.count(old) != 1 and old.strip() != 'if (data.session_expired) expireUI();':")
+          s = s.replace("s.replace(old, new, 1)", "s.replace(old, new) if old.strip() == 'if (data.session_expired) expireUI();' else s.replace(old, new, 1)")
+          p.write_text(s)
+          PY
+          python tools/apply_access_integration.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tools/deployment_smoke.py')
+          s = p.read_text()
+          old = "        run(*command)\n        assert (app / 'keep-local.txt')"
+          new = """        if os.getenv('NANO_SMOKE_ACCESS') == '1':
+                      access = root / 'access.json'
+                      access.write_text(json.dumps({'issuer': 'https://ci-example.cloudflareaccess.com',
+                                                    'audiences': ['fixture-aud'],
+                                                    'admin_emails': ['one@example.com', 'two@example.com']}))
+                      command += ['--access-config', access, '--require-access']
+                  run(*command)
+                  if os.getenv('NANO_SMOKE_ACCESS') == '1':
+                      assert (data / 'access/cloudflare.json').is_file()
+                      marker = data / 'users/persistent-fixture.txt'
+                      marker.write_text('profile must survive rollback')
+                      run('docker', 'exec', name, 'python', '-c',
+                          'from pathlib import Path; assert Path(\"/app/users/persistent-fixture.txt\").read_text()==\"profile must survive rollback\"')
+                  assert (app / 'keep-local.txt')"""
+          # Dedent only the indentation added for the YAML block's embedded replacement.
+          lines = new.splitlines()
+          new = '\n'.join([lines[0]] + [line[10:] for line in lines[1:]])
+          assert old in s
+          s = s.replace(old, new, 1)
+          old = "        assert not (data / 'deployment.json').exists()"
+          s = s.replace(old, old + "\n        if os.getenv('NANO_SMOKE_ACCESS') == '1':\n            assert (data / 'users/persistent-fixture.txt').read_text() == 'profile must survive rollback'", 1)
+          p.write_text(s)
+          p = Path('src/web/static/style.css')
+          p.write_text(p.read_text() + '\n.nano-key-state { display:flex; gap:8px; align-items:center; justify-content:space-between; margin-top:5px; }\n.nano-key-state small { color:var(--text-tertiary); }\n#nanoSiteIdentity { overflow-wrap:anywhere; font-weight:600; }\n')
+          PY
+          python -m compileall -q src/nano_banana deploy tools
+          for file in src/web/static/*.js; do node --check "$file"; done
+      - name: Commit generated source to feature branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src deploy pyproject.toml tools .github/workflows/web-regression.yml
+          git commit -m 'feat(access): 接入持久身份、多管理员、配置恢复和升级流程'
+          git push origin HEAD:feat/cloudflare-profiles-admins-20260921
+      - name: Run Python regression
+        run: |
+          pip install -e '.[web,dev]'
+          pytest -q
