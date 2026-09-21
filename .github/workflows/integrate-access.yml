@@ -44,9 +44,6 @@ jobs:
                       run('docker', 'exec', name, 'python', '-c',
                           'from pathlib import Path; assert Path(\"/app/users/persistent-fixture.txt\").read_text()==\"profile must survive rollback\"')
                   assert (app / 'keep-local.txt')"""
-          # Dedent only the indentation added for the YAML block's embedded replacement.
-          lines = new.splitlines()
-          new = '\n'.join([lines[0]] + [line[10:] for line in lines[1:]])
           assert old in s
           s = s.replace(old, new, 1)
           old = "        assert not (data / 'deployment.json').exists()"
