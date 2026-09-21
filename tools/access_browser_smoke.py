@@ -29,7 +29,10 @@ def main():
         jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
         jwk.update(kid='browser', alg='RS256', use='sig')
         AccessVerifier._download_keys = staticmethod(lambda _: {'keys': [jwk]})
-        from nano_banana.web.app import app
+        # web/__init__ 会创建默认 app；在测试公钥注入之后新建应用，避免使用旧 bound fetcher。
+        from nano_banana.web.app import app as default_app, create_app
+        default_app.extensions['nano_sessions'].close()
+        app = create_app()
         server = make_server('127.0.0.1', 0, app, threaded=True)
         worker = threading.Thread(target=server.serve_forever, daemon=True); worker.start()
         def token(name):
@@ -38,6 +41,7 @@ def main():
                                    sub=name, email=name+'@example.com', type='app', iat=now-1, nbf=now-1, exp=now+3600),
                               key, algorithm='RS256', headers={'kid': 'browser'})
         try:
+            assert app.extensions['nano_access'].verifier.verify(token('alice'))[0].subject == 'alice'
             with sync_playwright() as p:
                 browser = p.chromium.launch()
                 contexts = []
@@ -47,6 +51,7 @@ def main():
                     page = context.new_page()
                     page.goto(f'http://127.0.0.1:{server.server_port}')
                     page.wait_for_selector('#nanoAccountBtn')
+                    page.evaluate('() => window.NanoSession.ready')
                     return page
                 alice, bob, owner = tab('alice'), tab('bob'), tab('owner')
                 def config(page):
