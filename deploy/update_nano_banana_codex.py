@@ -169,8 +169,13 @@ def bounded(name, default, maximum):
 def deploy(args, data):
     access_file = Path(args.access_config).resolve() if args.access_config else data / 'access/cloudflare.json'
     access_enabled = access_file.is_file()
-    if args.require_access and not access_enabled:
-        raise RuntimeError('缺少 Access 配置；先使用 --configure-access，未停止旧服务')
+    prior = inspect(args.container)
+    was_access = prior is not None and 'NANO_ACCESS_REQUIRED=1' in prior['Config'].get('Env', [])
+    prior_manifest = data / 'deployment.json'
+    if prior_manifest.is_file():
+        was_access = was_access or json.loads(prior_manifest.read_text()).get('access_identity', False)
+    if (args.require_access or args.access_config or was_access) and not access_enabled:
+        raise RuntimeError('缺少 Access 配置；拒绝降级到无 Access 模式，未停止旧服务')
     if access_file.is_symlink():
         raise RuntimeError('Access 配置不能是符号链接')
     stamp = time.strftime('%Y%m%d-%H%M%S') + '-' + secrets.token_hex(2)
@@ -401,10 +406,10 @@ def configure_access(data):
         tty.write('将保存仅此服务器使用的 Access 配置。确认输入 YES: '); tty.flush()
         if tty.readline().strip() != 'YES':
             raise RuntimeError('已取消配置，未部署')
-    path.parent.mkdir(mode=0o700, exist_ok=True)
-    if path.exists():
-        shutil.copy2(path, path.with_name('cloudflare.previous-' + str(time.time_ns()) + '.json'))
-    save_json(path, settings)
+    # 交互输入不能提前覆盖运行中热加载的策略；新镜像校验通过后才在部署切换步骤安装。
+    pending = data / ('.access.pending-' + str(time.time_ns()) + '.json')
+    save_json(pending, settings)
+    return pending
 
 
 def main():
@@ -449,10 +454,16 @@ def main():
         elif args.rollback:
             rollback(manifest, args.rollback)
         else:
-            if args.configure_access:
-                configure_access(data)
-                args.require_access = True
-            deploy(args, data)
+            pending = None
+            try:
+                if args.configure_access:
+                    pending = configure_access(data)
+                    args.access_config = str(pending)
+                    args.require_access = True
+                deploy(args, data)
+            finally:
+                if pending is not None:
+                    pending.unlink(missing_ok=True)
 
 
 if __name__ == '__main__':
