@@ -43,7 +43,7 @@ class Scope:
 
 
 def enabled():
-    return os.getenv('NANO_MULTIUSER', '0') == '1'
+    return os.getenv('NANO_MULTIUSER', '0') == '1' or os.getenv('NANO_ACCESS_REQUIRED', '0') == '1'
 
 
 def current_scope():
@@ -153,18 +153,22 @@ def install(app):
     @app.get('/api/health')
     def health():
         from nano_banana.web.image_tasks import image_task_manager
-        return _response({'ok': True, 'multiuser': enabled(), 'workers': image_task_manager.max_workers})
+        return _response({'ok': True, 'multiuser': enabled(), 'access_identity': os.getenv('NANO_ACCESS_REQUIRED') == '1', 'workers': image_task_manager.max_workers})
 
     @app.get('/api/session/info')
     def session_info():
         return _response({'enabled': enabled(), 'heartbeat_seconds': 30, 'lease_seconds': 90,
-                          'absolute_seconds': ABSOLUTE_SECONDS})
+                          'absolute_seconds': ABSOLUTE_SECONDS,
+                          **(app.extensions['nano_access'].info() if 'nano_access' in app.extensions else {})})
 
     if not enabled():
         return
     app.config['MAX_CONTENT_LENGTH'] = 48 * 1024 * 1024
     manager = WebSessions(os.getenv('NANO_SESSION_ROOT', '/run/nano-web-sessions'))
     app.extensions['nano_sessions'] = manager
+    if os.getenv('NANO_ACCESS_REQUIRED', '0') == '1':
+        from nano_banana.web.access_binding import AccessBinding
+        AccessBinding(app, manager)
 
     @app.errorhandler(ExpiredSession)
     def expired(exc):
@@ -248,7 +252,8 @@ def install(app):
         scope = lease.state['scope']
         return {'role': 'owner' if scope.owner else 'personal',
                 'expires_in': max(0, int(lease.deadline - manager.leases.clock())),
-                'heartbeat_seconds': 30, 'lease_seconds': 90}
+                'heartbeat_seconds': 30, 'lease_seconds': 90,
+                **(app.extensions['nano_access'].summary(lease) if 'nano_access' in app.extensions else {})}
 
     @app.post('/api/session/open')
     def open_session():
@@ -256,6 +261,8 @@ def install(app):
             return _response({'error': '缺少同源客户端标记'}, 403)
         manager.limit('open', request.remote_addr or '', 10)
         token, lease = manager.create()
+        if 'nano_access' in app.extensions:
+            app.extensions['nano_access'].attach(lease)
         return _response({'token': token, **summary(lease)}, 201)
 
     @app.post('/api/session/heartbeat')

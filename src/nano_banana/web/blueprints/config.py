@@ -7,6 +7,8 @@ from nano_banana.web.context import config_manager
 
 bp = Blueprint("config", __name__)
 
+SECRET_KEYS = {"api_key", "gemini_api_key", "openai_image_api_key", "qwen_image_api_key", "doubao_image_api_key"}
+
 
 @bp.get("/api/config")
 def get_config():
@@ -49,6 +51,15 @@ def update_config():
         if not isinstance(data, dict):
             return jsonify({"error": "请求体必须是 JSON 对象"}), 400
         updates = flatten_legacy_or_nested(data)
+        from nano_banana.core.config import AIConfigManager
+        if set(updates) - set(AIConfigManager.DEFAULT_CONFIG):
+            return jsonify({"error": "配置包含不允许的字段"}), 400
+        for key in SECRET_KEYS & updates.keys():
+            if not isinstance(updates[key], str):
+                return jsonify({"error": "API Key 必须是字符串"}), 400
+        # 空白保存只更新其它设置；删除必须走显式 DELETE，不能误清其它页签保存的 Key。
+        updates = {key: value for key, value in updates.items()
+                   if key not in SECRET_KEYS or value.strip()}
         if updates.get("chat_engine", "api") not in {"api", "codex"}:
             return jsonify({"error": "未知提示词后端"}), 400
         if updates.get("codex_effort", "auto") not in {"auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"}:
@@ -71,3 +82,12 @@ def update_config():
         return jsonify({"success": True})
     except Exception as exc:  # noqa: BLE001
         return jsonify({"error": str(exc)}), 500
+
+
+@bp.delete('/api/config/keys/<key>')
+def clear_api_key(key):
+    if key not in SECRET_KEYS:
+        return jsonify({'error': '未知密钥字段'}), 400
+    if not config_manager.save_config({key: ''}):
+        return jsonify({'error': '密钥清除失败'}), 500
+    return jsonify({'success': True})

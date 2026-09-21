@@ -622,3 +622,7 @@ select.select-input, .codex-model-trigger {
 #nanoSessionStatus[data-state="error"] { color: var(--error-color); }
 .nano-auth-body details input { margin: 10px 0; }
 #nanoAccountBtn { flex-shrink: 0; }
+
+.nano-key-state { display:flex; gap:8px; align-items:center; justify-content:space-between; margin-top:5px; }
+.nano-key-state small { color:var(--text-tertiary); }
+#nanoSiteIdentity { overflow-wrap:anywhere; font-weight:600; }

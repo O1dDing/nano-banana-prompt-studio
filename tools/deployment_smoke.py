@@ -59,7 +59,19 @@ def main():
         command = [sys.executable, ROOT / 'deploy/update_nano_banana_codex.py',
                    '--repo', repo, '--ref', 'fixture', '--app', app,
                    '--data', data, '--container', name]
+        if os.getenv('NANO_SMOKE_ACCESS') == '1':
+            access = root / 'access.json'
+            access.write_text(json.dumps({'issuer': 'https://ci-example.cloudflareaccess.com',
+                                          'audiences': ['fixture-aud'],
+                                          'admin_emails': ['one@example.com', 'two@example.com']}))
+            command += ['--access-config', access, '--require-access']
         run(*command)
+        if os.getenv('NANO_SMOKE_ACCESS') == '1':
+            assert (data / 'access/cloudflare.json').is_file()
+            marker = data / 'users/persistent-fixture.txt'
+            marker.write_text('profile must survive rollback')
+            run('docker', 'exec', name, 'python', '-c',
+                'from pathlib import Path; assert Path("/app/users/persistent-fixture.txt").read_text()=="profile must survive rollback"')
         assert (app / 'keep-local.txt').read_text() == 'personal modification must survive'
         assert (data / 'config/ai_config.yaml').is_file()
         assert (data / 'presets/container.json').is_file()
@@ -86,6 +98,8 @@ def main():
         assert old['State']['Running']
         assert not (old['Config'].get('Labels') or {}).get('io.nano-banana.deployment')
         assert not (data / 'deployment.json').exists()
+        if os.getenv('NANO_SMOKE_ACCESS') == '1':
+            assert (data / 'users/persistent-fixture.txt').read_text() == 'profile must survive rollback'
         print('Deployment smoke PASS: directory conflict, keys/presets/ports/networks, isolated bridge, full rollback')
     finally:
         names = run('docker', 'ps', '-a', '--format', '{{.Names}}', capture=True).stdout.splitlines()

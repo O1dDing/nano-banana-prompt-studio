@@ -86,7 +86,7 @@ def ports_and_networks(old):
             ports.append(f'{prefix}:{target}')
     networks = [n for n in old['NetworkSettings']['Networks'] if n not in ('bridge', 'host', 'none')]
     allowed = {'/app/src/config', '/app/src/config/ai_config.yaml', '/app/src/config/options.yaml',
-               '/app/src/presets', '/run/secrets/codex-bridge-token', '/run/secrets/nano-admin-token', '/run/nano-web-sessions'}
+               '/app/src/presets', '/run/secrets/codex-bridge-token', '/run/secrets/nano-admin-token', '/run/nano-web-sessions', '/run/nano-access', '/app/users'}
     extra = [m['Destination'] for m in old.get('Mounts', []) if m['Destination'] not in allowed]
     if extra:
         raise RuntimeError('发现额外挂载，未停止旧服务。需人工核对迁移：' + ', '.join(extra))
@@ -121,7 +121,7 @@ def rollback(manifest, backup):
     bridge = inspect(manifest['bridge'])
     if bridge and (bridge['Config'].get('Labels') or {}).get(LABEL) == manifest['stamp']:
         run('docker', 'rm', '-f', manifest['bridge'])
-    for key in ('config', 'presets'):
+    for key in ('config', 'presets', 'access'):
         prior = backup / 'pre-swap' / key
         if prior.exists():
             live = data / key
@@ -167,6 +167,12 @@ def bounded(name, default, maximum):
 
 
 def deploy(args, data):
+    access_file = Path(args.access_config).resolve() if args.access_config else data / 'access/cloudflare.json'
+    access_enabled = access_file.is_file()
+    if args.require_access and not access_enabled:
+        raise RuntimeError('缺少 Access 配置；先使用 --configure-access，未停止旧服务')
+    if access_file.is_symlink():
+        raise RuntimeError('Access 配置不能是符号链接')
     stamp = time.strftime('%Y%m%d-%H%M%S') + '-' + secrets.token_hex(2)
     backup = data / 'backups' / stamp
     source = data / 'releases' / stamp
@@ -228,7 +234,18 @@ def deploy(args, data):
     )
     run('docker', 'run', '--rm', '--entrypoint', 'python',
         bridge_image, '-c', bridge_probe)
-    secret_dir, auth = data / 'secrets', data / 'codex-auth'
+    if access_enabled:
+        access_stage = backup / 'staging/access'
+        access_stage.mkdir(mode=0o700)
+        shutil.copy2(access_file, access_stage / 'cloudflare.json')
+        os.chmod(access_stage / 'cloudflare.json', 0o600)
+        # 先用新镜像的实际解析器验证信任边界，错误配置绝不进入切换步骤。
+        run('docker', 'run', '--rm', '-v', f'{access_stage}:/run/nano-access:ro', web_image,
+            'python', '-c', "from nano_banana.core.access_config import AccessConfig; c=AccessConfig.load('/run/nano-access/cloudflare.json'); print('Access 配置校验通过；多管理员已配置')")
+        profiles = data / 'users'
+        profiles.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(profiles, 0o700)
+    secret_dir, auth = data / 'secrets', data / 'codex-auth' 
     secret_dir.mkdir(exist_ok=True)
     auth.mkdir(exist_ok=True)
     os.chown(auth, 10001, 10001)
@@ -293,6 +310,12 @@ def deploy(args, data):
             if (data / key).exists():
                 (data / key).rename(backup / 'pre-swap' / key)
             (backup / 'staging' / key).rename(data / key)
+        if access_enabled:
+            if (data / 'access').exists():
+                (data / 'access').rename(backup / 'pre-swap/access')
+            (backup / 'staging/access').rename(data / 'access')
+            # 旧 Web 已停止，复制完整个人仓库；回滚不覆盖升级后用户新写入的档案。
+            shutil.copytree(data / 'users', backup / 'users-snapshot', symlinks=True)
         cmd = ['docker', 'create', '--name', args.container, '--label', f'{LABEL}={stamp}',
                '--restart', 'unless-stopped', '--network', networks[0] if networks else network,
                '-e', f'CODEX_BRIDGE_URL=http://{manifest["bridge"]}:8787',
@@ -304,6 +327,10 @@ def deploy(args, data):
                '-e', 'IMAGE_TASK_TTL_SECONDS=1800', '-e', f'WEB_THREADS={threads}', '-e', 'WEB_TIMEOUT=180',
                '-v', f'{data}/config:/app/src/config', '-v', f'{data}/presets:/app/src/presets',
                '-v', f'{token}:/run/secrets/codex-bridge-token:ro']
+        if access_enabled:
+            cmd += ['-e', 'NANO_ACCESS_REQUIRED=1', '-e', 'NANO_ACCESS_CONFIG_FILE=/run/nano-access/cloudflare.json',
+                    '-e', 'NANO_PROFILES_DIR=/app/users', '-v', f'{data}/access:/run/nano-access:ro',
+                    '-v', f'{data}/users:/app/users']
         for binding in ports:
             cmd += ['-p', binding]
         run(*cmd, web_image)
@@ -315,7 +342,9 @@ def deploy(args, data):
         run('docker', 'start', args.container)
         result = wait_health(args.container, "import json,urllib.request; u='http://127.0.0.1:5000'; d=json.load(urllib.request.urlopen(u+'/api/health',timeout=3)); assert d['multiuser'] and d['workers']>0; print(json.dumps(d))")
         run('docker', 'exec', args.container, 'python', '-c', "from nano_banana.core.codex_client import CodexBridge; b=CodexBridge(); assert b.request('GET','/health')['ok']; b.close()")
-        save_json(data / 'deployment.json', {**manifest, 'commit': sha, 'source': str(source),
+        if access_enabled:
+            run('docker', 'exec', args.container, 'python', '-c', "import json,urllib.request,urllib.error; u='http://127.0.0.1:5000'; assert json.load(urllib.request.urlopen(u+'/api/health'))['access_identity']; exec(\"try:\n urllib.request.urlopen(u+'/api/config')\n raise AssertionError('missing JWT accepted')\nexcept urllib.error.HTTPError as e:\n assert e.code == 403\")")
+        save_json(data / 'deployment.json', {**manifest, 'access_identity': access_enabled, 'commit': sha, 'source': str(source),
                     'web_image': web_image, 'bridge_image': bridge_image, 'backup': str(backup)})
         old_state = backup / 'deployment-before.json'
         if old_state.is_file():
@@ -326,7 +355,11 @@ def deploy(args, data):
         print(f'登录：sudo python3 {Path(__file__).resolve()} --data {data} --login-only')
         print(f'回滚：sudo python3 {Path(__file__).resolve()} --rollback {backup}')
         print('浏览器 Ctrl+Shift+R → 我的 Codex → 个人设备授权。原配置仅管理员可见。')
-        print(f'管理员密钥只在服务器查看：cat {admin_token}')
+        if access_enabled:
+            print(f'Cloudflare 身份和多管理员配置：{data}/access/cloudflare.json')
+            print('Cloudflare 登录后恢复个人 API；管理员自动使用原服务器配置。无需粘贴管理员密钥。')
+        else:
+            print(f'管理员密钥只在服务器查看：cat {admin_token}')
     except BaseException:
         note('更新失败，恢复旧容器及原数据')
         try:
@@ -336,6 +369,44 @@ def deploy(args, data):
         raise
 
 
+def configure_access(data):
+    """仅服务器 root 可运行；配置和密钥不从浏览器参数学习。"""
+    path = data / 'access/cloudflare.json'
+    existing = json.loads(path.read_text()) if path.is_file() else {}
+    with open('/dev/tty', 'r+') as tty:
+        def ask(label, current=''):
+            tty.write(f'{label}' + (f' [{current}]' if current else '') + ': ')
+            tty.flush()
+            line = tty.readline()
+            if not line:
+                raise RuntimeError('配置输入已结束')
+            return line.strip() or current
+        issuer = ask('Cloudflare Team 域名（例如 myteam.cloudflareaccess.com）', existing.get('issuer', ''))
+        if not issuer.startswith('https://'):
+            issuer = 'https://' + issuer
+        issuer = issuer.rstrip('/')
+        if not re.fullmatch(r'https://[a-z0-9][a-z0-9-]*[.]cloudflareaccess[.]com', issuer):
+            raise RuntimeError('Team 域名格式无效')
+        def values(name, label):
+            raw = ask(label, ','.join(existing.get(name, [])))
+            return [] if raw == '-' else list(dict.fromkeys(v.strip() for v in re.split(r'[,;\s]+', raw) if v.strip()))
+        audiences = values('audiences', 'Application Audience (AUD)，多个用逗号分隔')
+        emails = values('admin_emails', '管理员邮箱，多个用逗号分隔；输入 - 清空')
+        subjects = values('admin_subjects', '管理员 sub，可留空；输入 - 清空')
+        if not audiences or not (emails or subjects):
+            raise RuntimeError('至少提供一个 AUD 和一名管理员')
+        if any(not re.fullmatch(r'[^\s@*]+@[^\s@*]+[.][^\s@*]+', e) for e in emails):
+            raise RuntimeError('管理员邮箱无效')
+        settings = dict(existing, issuer=issuer, audiences=audiences, admin_emails=emails, admin_subjects=subjects)
+        tty.write('将保存仅此服务器使用的 Access 配置。确认输入 YES: '); tty.flush()
+        if tty.readline().strip() != 'YES':
+            raise RuntimeError('已取消配置，未部署')
+    path.parent.mkdir(mode=0o700, exist_ok=True)
+    if path.exists():
+        shutil.copy2(path, path.with_name('cloudflare.previous-' + str(time.time_ns()) + '.json'))
+    save_json(path, settings)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app', default='/opt/nano-banana-prompt-studio')
@@ -343,6 +414,9 @@ def main():
     parser.add_argument('--container', default='nano-banana-web')
     parser.add_argument('--repo', default='https://github.com/O1dDing/nano-banana-prompt-studio.git')
     parser.add_argument('--ref', default='main')
+    parser.add_argument('--access-config', help='Cloudflare JSON 文件；默认读取 DATA/access/cloudflare.json')
+    parser.add_argument('--require-access', action='store_true', help='无 Access 配置则拒绝部署')
+    parser.add_argument('--configure-access', action='store_true', help='交互填写 team、AUD、多位管理员，然后更新')
     parser.add_argument('--login-only', action='store_true')
     parser.add_argument('--rollback', type=Path)
     args = parser.parse_args()
@@ -375,6 +449,9 @@ def main():
         elif args.rollback:
             rollback(manifest, args.rollback)
         else:
+            if args.configure_access:
+                configure_access(data)
+                args.require_access = True
             deploy(args, data)
 
 

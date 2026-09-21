@@ -55,6 +55,7 @@ function openConfigModal() {
         || 'doubao-seedream-5-0-pro-260628';
     updateImageConfigVisibility();
 
+    if (typeof refreshProfileKeyControls === 'function') refreshProfileKeyControls();
     elements.configModal.classList.add('active');
 }
 
@@ -90,6 +91,10 @@ async function saveConfigs() {
         payload.doubao_image_api_key = elements.configDoubaoImageApiKey.value;
     }
 
+    // 只提交改变的字段，避免同一个人的两个页签覆盖彼此未修改的设置。
+    for (const [key, value] of Object.entries(payload)) {
+        if (value === state.config[key]) delete payload[key];
+    }
     try {
         const response = await fetch('/api/config', {
             method: 'POST',

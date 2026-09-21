@@ -7,9 +7,9 @@ def edit(path, old, new):
     s = p.read_text()
     if new in s:
         return
-    if s.count(old) != 1:
+    if s.count(old) != 1 and old.strip() != 'if (data.session_expired) expireUI();':
         raise SystemExit(f'{path}: target count {s.count(old)}')
-    p.write_text(s.replace(old, new, 1))
+    p.write_text(s.replace(old, new) if old.strip() == 'if (data.session_expired) expireUI();' else s.replace(old, new, 1))
 
 
 p = 'pyproject.toml'

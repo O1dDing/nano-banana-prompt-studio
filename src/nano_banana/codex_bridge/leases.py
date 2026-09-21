@@ -61,6 +61,7 @@ class Leases:
     def is_expired(self, lease):
         now = self.clock()
         return (lease.closed.is_set() or now >= lease.deadline
+                or now >= lease.state.get('access_deadline', float('inf'))
                 or now - lease.seen >= LEASE_SECONDS)
 
     def get(self, token):

@@ -6,6 +6,7 @@
     let token = '', active = false, role = 'personal', worker = null, fallback = null;
     let heartbeatBusy = false, loginTimer = null, releaseLock = null, channel = null;
     let lost = false, authCode = '';
+    let accessInfo = null;
     const instance = crypto.randomUUID();
     const apiURL = value => new URL(typeof value === 'string' ? value : value.url, location.href);
     async function jsonRequest(path, options = {}) {
@@ -15,7 +16,7 @@
         const response = await rawFetch(path, {...options, headers, cache: 'no-store'});
         const data = await response.json();
         if (!response.ok) {
-            if (data.session_expired) expireUI();
+            if (data.session_expired || data.access_required) expireUI();
             throw new Error(data.error || `HTTP ${response.status}`);
         }
         return data;
@@ -43,7 +44,9 @@
         const el = document.getElementById('nanoSessionStatus');
         if (el) {el.textContent = text; el.dataset.state = kind;}
         const badge = document.getElementById('nanoAccountBtn');
-        if (badge) badge.textContent = role === 'owner' ? '管理员' : '我的 Codex';
+        if (badge) {badge.textContent = role === 'owner' ? '管理员' : '我的 Codex'; badge.title = accessInfo?.email || '';}
+        const identity = document.getElementById('nanoSiteIdentity');
+        if (identity) identity.textContent = accessInfo ? '网站身份：' + accessInfo.email + (role === 'owner' ? ' · 管理员' : '') : '';
     }
     async function claimTab(candidate) {
         if (navigator.locks) {
@@ -107,6 +110,15 @@
     async function bootstrap() {
         const info = await jsonRequest('/api/session/info');
         if (!info.enabled) return; // 兼容单用户旧部署和离线 UI 测试。
+        accessInfo = info.identity_provider === 'cloudflare' ? info : null;
+        if (accessInfo) {
+            const previous = sessionStorage.getItem('nano.access.identity');
+            if (previous && previous !== info.identity_key) {
+                sessionStorage.removeItem(KEY);
+                sessionStorage.removeItem('nano-banana-form-draft');
+            }
+            sessionStorage.setItem('nano.access.identity', info.identity_key);
+        }
         active = true;
         const saved = sessionStorage.getItem(KEY);
         if (saved && await claimTab(saved)) {
@@ -130,9 +142,9 @@
         new Headers(init.headers).forEach((value, key) => headers.set(key, value));
         headers.set('X-Nano-Session', token);
         const response = await rawFetch(input, {...init, headers, cache: 'no-store'});
-        if (response.status === 401) {
+        if (response.status === 401 || response.status === 403 || response.status === 503) {
             const data = await response.clone().json().catch(() => ({}));
-            if (data.session_expired) expireUI();
+            if (data.session_expired || data.access_required) expireUI();
         }
         return response;
     };
@@ -141,7 +153,7 @@
         const modal = document.createElement('div');
         modal.id = 'nanoSessionModal'; modal.className = 'modal';
         modal.innerHTML = '<div class="modal-content"><div class="modal-header"><h3>我的 Codex 账户</h3><button id="nanoSessionClose" class="modal-close" type="button" aria-label="关闭">×</button></div>'
-          + '<div class="modal-body nano-auth-body"><p id="nanoSessionStatus" role="status">尚未认证</p>'
+          + '<div class="modal-body nano-auth-body"><p id="nanoSiteIdentity"></p><p id="nanoSessionStatus" role="status">尚未认证</p>'
           + '<p>仅使用你自己的额度。刷新保留登录；关闭页签后按心跳失联回收，最长 24 小时。</p>'
           + '<button id="nanoDeviceStart" type="button" class="btn btn-primary">登录我的 ChatGPT / Codex</button>'
           + '<div id="nanoDevicePanel" hidden><p>请在 OpenAI 官方页面输入下面的设备码：</p><strong id="nanoDeviceCode"></strong>'
@@ -149,10 +161,18 @@
           + '<p>授权的是此服务器上的临时 Codex 客户端；不要把设备码交给别人。</p></div>'
           + '<button id="nanoSessionLogout" type="button" class="btn btn-secondary">退出并销毁此会话</button>'
           + '<details><summary>服务器管理员</summary><p>管理员模式才可以使用服务器已有 API 配置和 Codex 身份。</p><input id="nanoOwnerKey" type="password" class="text-input" autocomplete="off" placeholder="管理员密钥"><button id="nanoOwnerLogin" type="button" class="btn btn-secondary">进入管理员模式</button></details></div></div>';
+        if (accessInfo) {
+            modal.querySelector('details').hidden = true;
+            document.getElementById('nanoSessionStatus');
+            const description = modal.querySelector('.nano-auth-body > p:nth-of-type(3)');
+            if (description) description.textContent = '网站身份由 Cloudflare 验证；API 配置和预设永久保存。Codex 授权仅用于当前页签，30 秒心跳、90 秒失联回收、最长 24 小时。';
+        }
         document.body.appendChild(modal);
         const button = document.createElement('button');
         button.id = 'nanoAccountBtn'; button.className = 'btn btn-secondary'; button.type = 'button';
-        button.textContent = '我的 Codex';
+        button.textContent = role === 'owner' ? '管理员' : '我的 Codex';
+        button.title = accessInfo?.email || '';
+        document.getElementById('nanoSiteIdentity').textContent = accessInfo ? '网站身份：' + accessInfo.email + (role === 'owner' ? ' · 管理员' : '') : '';
         (document.querySelector('.header-actions') || document.querySelector('.app-header') || document.body).appendChild(button);
         button.onclick = () => {modal.classList.add('active'); void refreshLogin();};
         document.getElementById('nanoSessionClose').onclick = () => modal.classList.remove('active');
@@ -174,7 +194,7 @@
             expireUI(); releaseLock?.(); releaseLock = null;
             channel?.close(); channel = null;
             // 新建空白个人身份，保留页面编辑器，但不恢复已销毁的凭据/私有配置。
-            try {await openSession(); await reloadWorkbench(); renderStatus('已退出；当前是新的未认证个人会话');}
+            try {await openSession(); await reloadWorkbench(); renderStatus(accessInfo ? 'Codex 会话已销毁；已重新加载此 Cloudflare 身份的持久配置' : '已退出；当前是新的未认证个人会话');}
             catch (error) {renderStatus(error.message, 'error');}
         };
         document.getElementById('nanoOwnerLogin').onclick = async () => {
@@ -218,7 +238,7 @@
             if (poll && ['starting', 'pending'].includes(data.state)) loginTimer = setTimeout(() => {void refreshLogin(true);}, 2000);
         } catch (error) {renderStatus(error.message, 'error');}
     }
-    window.NanoSession = {ready, get enabled() {return active;}, get role() {return role;},
+    window.NanoSession = {ready, get enabled() {return active;}, get role() {return role;}, get accessIdentity() {return accessInfo;},
         open() {document.getElementById('nanoSessionModal')?.classList.add('active'); void refreshLogin();}};
     ready.then(() => {
         if (!active) return;
