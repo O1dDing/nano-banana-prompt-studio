@@ -1,7 +1,7 @@
 name: Web and Codex regression
 on:
   push:
-    branches: [main, feat/codex-subscription-images-20260920, hotfix/codex-bridge-import-20260920, feat/multiuser-codex-sessions-20260920]
+    branches: [main, 'feat/**', 'fix/**', 'hotfix/**']
     paths: ['src/**', 'tests/**', 'tools/**', 'deploy/**', 'pyproject.toml', 'web_dockerfile', '.github/workflows/web-regression.yml']
   pull_request:
     branches: [main]
@@ -41,6 +41,7 @@ jobs:
           python -m playwright install --with-deps chromium
           python tools/browser_smoke.py
           python tools/multiuser_browser_smoke.py
+          python tools/access_browser_smoke.py
       - name: Build both production images
         run: |
           docker build -f web_dockerfile -t nano-web:regression .
@@ -67,7 +68,9 @@ jobs:
           docker exec nano-codex-test python -c 'from nano_banana.codex_bridge.runtime import probe_status; d=probe_status(); assert not d["logged_in"]; assert d["protocol"]["device_code_auth"]; print("Codex device-code protocol OK; no login attempted")'
           test -z "$(docker port nano-codex-test)"
       - name: Real multiuser Docker deployment and rollback
-        run: sudo --preserve-env=PATH python tools/deployment_smoke.py
+        run: |
+          sudo --preserve-env=PATH python tools/deployment_smoke.py
+          sudo --preserve-env=PATH python tools/access_deployment_smoke.py
       - name: Logs on failure
         if: failure()
         run: |
