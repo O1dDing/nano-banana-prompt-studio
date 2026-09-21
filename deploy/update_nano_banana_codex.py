@@ -348,7 +348,7 @@ def deploy(args, data):
         result = wait_health(args.container, "import json,urllib.request; u='http://127.0.0.1:5000'; d=json.load(urllib.request.urlopen(u+'/api/health',timeout=3)); assert d['multiuser'] and d['workers']>0; print(json.dumps(d))")
         run('docker', 'exec', args.container, 'python', '-c', "from nano_banana.core.codex_client import CodexBridge; b=CodexBridge(); assert b.request('GET','/health')['ok']; b.close()")
         if access_enabled:
-            run('docker', 'exec', args.container, 'python', '-c', "import json,urllib.request,urllib.error; u='http://127.0.0.1:5000'; assert json.load(urllib.request.urlopen(u+'/api/health'))['access_identity']; exec(\"try:\n urllib.request.urlopen(u+'/api/config')\n raise AssertionError('missing JWT accepted')\nexcept urllib.error.HTTPError as e:\n assert e.code == 403\")")
+            run('docker', 'exec', args.container, 'python', '-c', "import http.client,json; c=http.client.HTTPConnection('127.0.0.1',5000,timeout=3); c.request('GET','/api/health'); r=c.getresponse(); assert r.status==200; assert json.loads(r.read())['access_identity']; c.request('GET','/api/config'); r=c.getresponse(); assert r.status==403; assert json.loads(r.read())['access_required']; c.close(); print('Access runtime and unauthenticated-request rejection OK')")
         save_json(data / 'deployment.json', {**manifest, 'access_identity': access_enabled, 'commit': sha, 'source': str(source),
                     'web_image': web_image, 'bridge_image': bridge_image, 'backup': str(backup)})
         old_state = backup / 'deployment-before.json'
