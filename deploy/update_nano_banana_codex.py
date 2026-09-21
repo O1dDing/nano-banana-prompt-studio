@@ -374,15 +374,16 @@ def deploy(args, data):
         raise
 
 
-def configure_access(data):
+def configure_access(data, tty_path='/dev/tty'):
     """仅服务器 root 可运行；配置和密钥不从浏览器参数学习。"""
     path = data / 'access/cloudflare.json'
     existing = json.loads(path.read_text()) if path.is_file() else {}
-    with open('/dev/tty', 'r+') as tty:
+    with open(tty_path, 'r', encoding='utf-8', errors='strict') as tty_in, \
+            open(tty_path, 'w', encoding='utf-8', errors='strict', buffering=1) as tty_out:
         def ask(label, current=''):
-            tty.write(f'{label}' + (f' [{current}]' if current else '') + ': ')
-            tty.flush()
-            line = tty.readline()
+            tty_out.write(f'{label}' + (f' [{current}]' if current else '') + ': ')
+            tty_out.flush()
+            line = tty_in.readline()
             if not line:
                 raise RuntimeError('配置输入已结束')
             return line.strip() or current
@@ -403,8 +404,8 @@ def configure_access(data):
         if any(not re.fullmatch(r'[^\s@*]+@[^\s@*]+[.][^\s@*]+', e) for e in emails):
             raise RuntimeError('管理员邮箱无效')
         settings = dict(existing, issuer=issuer, audiences=audiences, admin_emails=emails, admin_subjects=subjects)
-        tty.write('将保存仅此服务器使用的 Access 配置。确认输入 YES: '); tty.flush()
-        if tty.readline().strip() != 'YES':
+        tty_out.write('将保存仅此服务器使用的 Access 配置。确认输入 YES: '); tty_out.flush()
+        if tty_in.readline().strip() != 'YES':
             raise RuntimeError('已取消配置，未部署')
     # 交互输入不能提前覆盖运行中热加载的策略；新镜像校验通过后才在部署切换步骤安装。
     pending = data / ('.access.pending-' + str(time.time_ns()) + '.json')
