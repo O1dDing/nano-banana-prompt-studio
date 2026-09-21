@@ -1,4 +1,4 @@
-name: Integrate Cloudflare profiles
+name: Harden Access deployment
 on:
   push:
     branches: [feat/cloudflare-profiles-admins-20260921]
@@ -6,7 +6,7 @@ on:
 permissions:
   contents: write
 jobs:
-  integrate:
+  harden:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -14,54 +14,74 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: Apply checked integration
+      - name: Preserve fail-closed mode and stage interactive configuration
         run: |
           python - <<'PY'
           from pathlib import Path
-          p = Path('tools/apply_access_integration.py')
+          p = Path('deploy/update_nano_banana_codex.py')
           s = p.read_text()
-          s = s.replace("if s.count(old) != 1:", "if s.count(old) != 1 and old.strip() != 'if (data.session_expired) expireUI();':")
-          s = s.replace("s.replace(old, new, 1)", "s.replace(old, new) if old.strip() == 'if (data.session_expired) expireUI();' else s.replace(old, new, 1)")
-          p.write_text(s)
-          PY
-          python tools/apply_access_integration.py
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('tools/deployment_smoke.py')
-          s = p.read_text()
-          old = "        run(*command)\n        assert (app / 'keep-local.txt')"
-          new = """        if os.getenv('NANO_SMOKE_ACCESS') == '1':
-                      access = root / 'access.json'
-                      access.write_text(json.dumps({'issuer': 'https://ci-example.cloudflareaccess.com',
-                                                    'audiences': ['fixture-aud'],
-                                                    'admin_emails': ['one@example.com', 'two@example.com']}))
-                      command += ['--access-config', access, '--require-access']
-                  run(*command)
-                  if os.getenv('NANO_SMOKE_ACCESS') == '1':
-                      assert (data / 'access/cloudflare.json').is_file()
-                      marker = data / 'users/persistent-fixture.txt'
-                      marker.write_text('profile must survive rollback')
-                      run('docker', 'exec', name, 'python', '-c',
-                          'from pathlib import Path; assert Path(\"/app/users/persistent-fixture.txt\").read_text()==\"profile must survive rollback\"')
-                  assert (app / 'keep-local.txt')"""
-          assert old in s
+          old = "    if args.require_access and not access_enabled:\n        raise RuntimeError('缺少 Access 配置；先使用 --configure-access，未停止旧服务')"
+          new = """    prior = inspect(args.container)
+              was_access = prior is not None and 'NANO_ACCESS_REQUIRED=1' in prior['Config'].get('Env', [])
+              prior_manifest = data / 'deployment.json'
+              if prior_manifest.is_file():
+                  was_access = was_access or json.loads(prior_manifest.read_text()).get('access_identity', False)
+              if (args.require_access or args.access_config or was_access) and not access_enabled:
+                  raise RuntimeError('缺少 Access 配置；拒绝降级到无 Access 模式，未停止旧服务')"""
+          if old not in s: raise SystemExit('required mode target missing')
           s = s.replace(old, new, 1)
-          old = "        assert not (data / 'deployment.json').exists()"
-          s = s.replace(old, old + "\n        if os.getenv('NANO_SMOKE_ACCESS') == '1':\n            assert (data / 'users/persistent-fixture.txt').read_text() == 'profile must survive rollback'", 1)
+          old = """    path.parent.mkdir(mode=0o700, exist_ok=True)
+              if path.exists():
+                  shutil.copy2(path, path.with_name('cloudflare.previous-' + str(time.time_ns()) + '.json'))
+              save_json(path, settings)
+          """
+          new = """    # 交互输入不能提前覆盖运行中热加载的策略；新镜像校验通过后才在部署切换步骤安装。
+              pending = data / ('.access.pending-' + str(time.time_ns()) + '.json')
+              save_json(pending, settings)
+              return pending
+          """
+          if old not in s: raise SystemExit('config staging target missing')
+          s = s.replace(old, new, 1)
+          old = """        else:
+                      if args.configure_access:
+                          configure_access(data)
+                          args.require_access = True
+                      deploy(args, data)
+          """
+          new = """        else:
+                      pending = None
+                      try:
+                          if args.configure_access:
+                              pending = configure_access(data)
+                              args.access_config = str(pending)
+                              args.require_access = True
+                          deploy(args, data)
+                      finally:
+                          if pending is not None:
+                              pending.unlink(missing_ok=True)
+          """
+          if old not in s: raise SystemExit('main config target missing')
+          s = s.replace(old, new, 1)
           p.write_text(s)
-          p = Path('src/web/static/style.css')
-          p.write_text(p.read_text() + '\n.nano-key-state { display:flex; gap:8px; align-items:center; justify-content:space-between; margin-top:5px; }\n.nano-key-state small { color:var(--text-tertiary); }\n#nanoSiteIdentity { overflow-wrap:anywhere; font-weight:600; }\n')
+          compile(s, str(p), 'exec')
           PY
-          python -m compileall -q src/nano_banana deploy tools
-          for file in src/web/static/*.js; do node --check "$file"; done
-      - name: Commit generated source to feature branch
+      - name: Commit reviewed updater and pin bootstrap to it
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src deploy pyproject.toml tools
-          git commit -m 'feat(access): 接入持久身份、多管理员、配置恢复和升级流程'
+          git add deploy/update_nano_banana_codex.py
+          git commit -m 'fix(deploy): Access 策略缺失拒绝降级，交互配置先校验后切换'
+          python - <<'PY'
+          import re, subprocess
+          from pathlib import Path
+          sha = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
+          blob = subprocess.check_output(['git','hash-object','deploy/update_nano_banana_codex.py'], text=True).strip()
+          p = Path('deploy/update_nano_banana_codex.sh')
+          s = re.sub(r"SOURCE_COMMIT='[^']+'", "SOURCE_COMMIT='"+sha+"'", p.read_text())
+          s = re.sub(r"EXPECTED_BLOB='[^']+'", "EXPECTED_BLOB='"+blob+"'", s)
+          p.write_text(s)
+          PY
+          bash -n deploy/update_nano_banana_codex.sh
+          git add deploy/update_nano_banana_codex.sh
+          git commit -m 'chore(deploy): 固定最终 Access 安全更新器'
           git push origin HEAD:feat/cloudflare-profiles-admins-20260921
-      - name: Run Python regression
-        run: |
-          pip install -e '.[web,dev]'
-          pytest -q
