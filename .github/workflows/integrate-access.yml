@@ -1,4 +1,4 @@
-name: Harden Access deployment
+name: Validate Access deployment probes
 on:
   push:
     branches: [feat/cloudflare-profiles-admins-20260921]
@@ -6,7 +6,7 @@ on:
 permissions:
   contents: write
 jobs:
-  harden:
+  probe:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -14,63 +14,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: Preserve fail-closed mode and stage interactive configuration
+      - name: Use plain HTTP probe without nested exec escaping
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path('deploy/update_nano_banana_codex.py')
-          s = p.read_text()
-          old = "    if args.require_access and not access_enabled:\n        raise RuntimeError('缺少 Access 配置；先使用 --configure-access，未停止旧服务')"
-          new = """    prior = inspect(args.container)
-              was_access = prior is not None and 'NANO_ACCESS_REQUIRED=1' in prior['Config'].get('Env', [])
-              prior_manifest = data / 'deployment.json'
-              if prior_manifest.is_file():
-                  was_access = was_access or json.loads(prior_manifest.read_text()).get('access_identity', False)
-              if (args.require_access or args.access_config or was_access) and not access_enabled:
-                  raise RuntimeError('缺少 Access 配置；拒绝降级到无 Access 模式，未停止旧服务')"""
-          if old not in s: raise SystemExit('required mode target missing')
-          s = s.replace(old, new, 1)
-          old = """    path.parent.mkdir(mode=0o700, exist_ok=True)
-              if path.exists():
-                  shutil.copy2(path, path.with_name('cloudflare.previous-' + str(time.time_ns()) + '.json'))
-              save_json(path, settings)
-          """
-          new = """    # 交互输入不能提前覆盖运行中热加载的策略；新镜像校验通过后才在部署切换步骤安装。
-              pending = data / ('.access.pending-' + str(time.time_ns()) + '.json')
-              save_json(pending, settings)
-              return pending
-          """
-          if old not in s: raise SystemExit('config staging target missing')
-          s = s.replace(old, new, 1)
-          old = """        else:
-                      if args.configure_access:
-                          configure_access(data)
-                          args.require_access = True
-                      deploy(args, data)
-          """
-          new = """        else:
-                      pending = None
-                      try:
-                          if args.configure_access:
-                              pending = configure_access(data)
-                              args.access_config = str(pending)
-                              args.require_access = True
-                          deploy(args, data)
-                      finally:
-                          if pending is not None:
-                              pending.unlink(missing_ok=True)
-          """
-          if old not in s: raise SystemExit('main config target missing')
-          s = s.replace(old, new, 1)
-          p.write_text(s)
-          compile(s, str(p), 'exec')
+          lines = p.read_text().splitlines()
+          matches = [i for i, line in enumerate(lines) if 'import json,urllib.request,urllib.error;' in line]
+          assert len(matches) == 1
+          code = ("import http.client,json; c=http.client.HTTPConnection('127.0.0.1',5000,timeout=3); "
+                  "c.request('GET','/api/health'); r=c.getresponse(); assert r.status==200; "
+                  "assert json.loads(r.read())['access_identity']; "
+                  "c.request('GET','/api/config'); r=c.getresponse(); assert r.status==403; "
+                  "assert json.loads(r.read())['access_required']; c.close(); "
+                  "print('Access runtime and unauthenticated-request rejection OK')")
+          compile(code, '<access-probe>', 'exec')
+          lines[matches[0]] = "            run('docker', 'exec', args.container, 'python', '-c', " + repr(code) + ")"
+          raw = '\n'.join(lines) + '\n'
+          compile(raw, str(p), 'exec')
+          p.write_text(raw)
           PY
-      - name: Commit reviewed updater and pin bootstrap to it
+      - name: Commit and pin reviewed updater
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add deploy/update_nano_banana_codex.py
-          git commit -m 'fix(deploy): Access 策略缺失拒绝降级，交互配置先校验后切换'
+          git commit -m 'fix(deploy): 使用可直接执行的 Access HTTP 健康检查'
           python - <<'PY'
           import re, subprocess
           from pathlib import Path
@@ -83,5 +52,5 @@ jobs:
           PY
           bash -n deploy/update_nano_banana_codex.sh
           git add deploy/update_nano_banana_codex.sh
-          git commit -m 'chore(deploy): 固定最终 Access 安全更新器'
+          git commit -m 'chore(deploy): 锁定通过语法预检的 Access 更新器'
           git push origin HEAD:feat/cloudflare-profiles-admins-20260921
