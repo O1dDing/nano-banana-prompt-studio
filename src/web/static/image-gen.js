@@ -29,6 +29,7 @@ async function loadConfig() {
 }
 
 function openConfigModal() {
+    loadCodexSettings();
     elements.configBaseUrl.value = state.config.base_url || '';
     elements.configApiKey.value = ''; // Don't show API key
     elements.configModel.value = state.config.model || '';
@@ -59,6 +60,7 @@ function openConfigModal() {
 
 async function saveConfigs() {
     const payload = {
+        ...collectCodexSettings(),
         base_url: elements.configBaseUrl.value,
         model: elements.configModel.value,
         chat_web_search_mode: elements.configChatWebSearchMode.value,
@@ -186,50 +188,13 @@ function getSavedImageOptions(provider, model) {
 }
 
 function renderImageProviderOptions() {
-    if (!elements.imageProviderOptions) return;
-
-    const provider = getActiveImageProvider();
-    const model = getActiveImageModel();
-    const providerConfig = state.imageProviders[provider];
-    const capabilities = providerConfig?.capabilities?.[model];
-    const providerOptions = capabilities?.options || {};
-    const savedOptions = getSavedImageOptions(provider, model);
-
-    if (!providerConfig || Object.keys(providerOptions).length === 0) {
-        elements.imageProviderOptions.replaceChildren();
-        updateImageGenerationAvailability();
-        return;
-    }
-
-    elements.imageProviderOptions.innerHTML = Object.entries(providerOptions).map(([key, option]) => {
-        const values = option.values || [];
-        const options = values.map(value => {
-            const savedValue = savedOptions[key];
-            const selectedValue = values.includes(savedValue) ? savedValue : option.default;
-            const selected = value === selectedValue ? 'selected' : '';
-            return `<option value="${value}" ${selected}>${value}</option>`;
-        }).join('');
-
-        return `
-            <div class="form-group">
-                <label>${option.label}</label>
-                <select class="select-input image-option-input" data-option-key="${key}">
-                    ${options}
-                </select>
-            </div>
-        `;
-    }).join('');
-
-    document.querySelectorAll('.image-option-input').forEach(input => {
-        input.addEventListener('change', () => persistImageGenerationSettings(true));
-    });
-    updateImageGenerationAvailability();
+    renderAdvancedImageOptions();
 }
 
 function collectImageOptions() {
     const options = {};
     document.querySelectorAll('.image-option-input').forEach(input => {
-        options[input.dataset.optionKey] = input.value;
+        if (!input.disabled) options[input.dataset.optionKey] = input.value;
     });
     return options;
 }
@@ -343,13 +308,15 @@ function updateImageConfigVisibility() {
  * 把文件加入参考图列表（文件选择/拖拽/粘贴共用入口）。
  * 同步按剩余名额截断，修复多选时 FileReader 异步竞态导致超限的问题。
  */
-function addImageFilesToList(files, list, renderFn, maxCount = 3) {
+const pendingImageUploads = new WeakMap();
+function addImageFilesToList(files, list, renderFn, maxCount = null) {
+    maxCount = maxCount ?? (list === state.uploadedImages ? (state.imageProviders[getActiveImageProvider()]?.capabilities?.[getActiveImageModel()]?.max_reference_images || 3) : 3);
     const imageFiles = Array.from(files).filter(file => file.type.startsWith('image/'));
     if (!imageFiles.length) {
         showToast('请选择图片文件', 'error');
         return;
     }
-    const remaining = maxCount - list.length;
+    const remaining = maxCount - list.length - (pendingImageUploads.get(list) || 0);
     if (remaining <= 0) {
         showToast(`最多上传${maxCount}张`, 'warning');
         return;
@@ -357,8 +324,11 @@ function addImageFilesToList(files, list, renderFn, maxCount = 3) {
     if (imageFiles.length > remaining) {
         showToast(`最多上传${maxCount}张，已忽略多余的 ${imageFiles.length - remaining} 张`, 'warning');
     }
-    imageFiles.slice(0, remaining).forEach(file => {
+    const selected = imageFiles.slice(0, remaining);
+    pendingImageUploads.set(list, (pendingImageUploads.get(list) || 0) + selected.length);
+    selected.forEach(file => {
         const reader = new FileReader();
+        reader.onloadend = () => pendingImageUploads.set(list, Math.max(0, (pendingImageUploads.get(list) || 0) - 1));
         reader.onload = evt => {
             list.push(evt.target.result);
             renderFn();
@@ -584,6 +554,10 @@ async function generateImage() {
         return;
     }
 
+    const invalidOptions = imageOptionsError();
+    if (invalidOptions) {showToast(invalidOptions, 'error'); return;}
+    const requestOptions = collectImageOptions();
+    const referenceSnapshot = [...state.uploadedImages];
     state.isGenerating = true;
     state.currentImageTaskId = null;
     state.imageGenAbortController = new AbortController();
@@ -610,10 +584,10 @@ async function generateImage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 prompt,
-                images: state.uploadedImages,
+                images: referenceSnapshot,
                 provider,
                 model,
-                options: collectImageOptions()
+                options: requestOptions
             }),
             signal: state.imageGenAbortController.signal
         });
@@ -629,8 +603,7 @@ async function generateImage() {
             submitted.task_id,
             state.imageGenAbortController.signal
         );
-        state.generationHistory.push(result.image);
-        if (state.generationHistory.length > 8) state.generationHistory.shift();
+        storeImageTaskResults(result);
         renderGenerationResult(result.image);
         showToast('图片生成成功!', 'success');
     } catch (error) {
@@ -661,6 +634,7 @@ function renderGenerationResult(src) {
 
     const container = document.createElement('div');
     container.className = 'generated-result-container';
+    appendImageMetadata(container, src);
 
     const wrap = document.createElement('div');
     wrap.className = 'generated-img-wrap';

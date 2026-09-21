@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 
 from nano_banana.core.config import flatten_legacy_or_nested
-from nano_banana.core.images.provider_config import IMAGE_PROVIDER_META
+from nano_banana.web.providers import WEB_PROVIDER_META as IMAGE_PROVIDER_META
 from nano_banana.core.web_search import normalize_web_search_mode
 from nano_banana.web.context import config_manager
 
@@ -13,6 +13,9 @@ def get_config():
     try:
         config = config_manager.load_config()
         safe_config = {
+            "chat_engine": config.get("chat_engine") or "api",
+            "codex_model": config.get("codex_model") or "",
+            "codex_effort": config.get("codex_effort") or "auto",
             "base_url": config.get("base_url", ""),
             "model": config.get("model", ""),
             "chat_web_search_mode": normalize_web_search_mode(
@@ -46,6 +49,12 @@ def update_config():
         if not isinstance(data, dict):
             return jsonify({"error": "请求体必须是 JSON 对象"}), 400
         updates = flatten_legacy_or_nested(data)
+        if updates.get("chat_engine", "api") not in {"api", "codex"}:
+            return jsonify({"error": "未知提示词后端"}), 400
+        if updates.get("codex_effort", "auto") not in {"auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"}:
+            return jsonify({"error": "无效 Codex 推理强度"}), 400
+        if "codex_model" in updates and (not isinstance(updates["codex_model"], str) or len(updates["codex_model"]) > 128):
+            return jsonify({"error": "无效 Codex 模型名称"}), 400
         if "chat_web_search_mode" in updates:
             updates["chat_web_search_mode"] = normalize_web_search_mode(
                 updates["chat_web_search_mode"]

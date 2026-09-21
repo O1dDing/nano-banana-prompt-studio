@@ -32,7 +32,7 @@ IMAGE_PROVIDER_META: dict[str, dict[str, Any]] = {
             "model": "openai_image_model",
         },
         "url_placeholder": "https://api.openai.com/v1",
-        "model_suggestions": ["gpt-image-2"],
+        "model_suggestions": ["gpt-image-2", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst-2026-09-08", "gpt-image-2.5-flare-2026-09-08"],
         "default_model": "gpt-image-2",
         "default_base_url": "https://api.openai.com/v1",
     },

@@ -28,6 +28,9 @@ def flatten_legacy_or_nested(data: dict[str, Any]) -> dict[str, Any]:
             result["chat_web_search_mode"] = chat["web_search_mode"]
         elif "chat_web_search_mode" in chat:
             result["chat_web_search_mode"] = chat["chat_web_search_mode"]
+        for nested, flat in (("engine", "chat_engine"), ("codex_model", "codex_model"), ("codex_effort", "codex_effort")):
+            if nested in chat:
+                result[flat] = chat[nested]
     image = data.get("image")
     if isinstance(image, dict):
         if "active" in image:
@@ -65,6 +68,9 @@ def nest_config(flat: dict[str, Any]) -> dict[str, Any]:
             "api_key": flat.get("api_key") or "",
             "model": flat.get("model") or "",
             "web_search_mode": flat.get("chat_web_search_mode") or "auto",
+            "engine": flat.get("chat_engine") or "api",
+            "codex_model": flat.get("codex_model") or "",
+            "codex_effort": flat.get("codex_effort") or "auto",
         },
         "image": {
             "active": flat.get("image_provider") or "gemini",
@@ -82,6 +88,9 @@ class AIConfigManager:
         "api_key": "",
         "model": "gpt-5.1",
         "chat_web_search_mode": "auto",
+        "chat_engine": "api",
+        "codex_model": "",
+        "codex_effort": "auto",
         "image_provider": "gemini",
         "gemini_base_url": "",
         "gemini_api_key": "",
@@ -185,6 +194,9 @@ class AIConfigManager:
             "base_url": (config.get("base_url") or "").strip(),
             "api_key": (config.get("api_key") or "").strip(),
             "model": (config.get("model") or "").strip(),
+            "engine": config.get("chat_engine") or "api",
+            "codex_model": config.get("codex_model") or "",
+            "codex_effort": config.get("codex_effort") or "auto",
             "web_search_mode": (
                 config.get("chat_web_search_mode") or "auto"
             ).strip(),
@@ -233,6 +245,10 @@ class AIConfigManager:
 
     def set_active_image_selection(self, provider: str, model: str | None = None) -> bool:
         """保存主界面当前使用的图片渠道和模型，不改动任何凭证。"""
+        if provider == "codex_images":
+            if model not in (None, "gpt-image-2"):
+                raise ValueError("Codex 内置 Image 模型不可指定")
+            return self.save_config({"image_provider": provider})
         meta = IMAGE_PROVIDER_META.get(provider)
         if not meta:
             raise ValueError(f"未知图片生成渠道: {provider}")
@@ -256,23 +272,18 @@ class AIConfigManager:
         options = provider_options.get(self._options_model_key(model)) or {}
         return deepcopy(options) if isinstance(options, dict) else {}
 
-    def save_image_generation_options(
-        self,
-        provider: str,
-        model: str,
-        options: dict[str, Any],
-    ) -> bool:
-        """保存指定渠道/模型的生成参数偏好。"""
-        if provider not in IMAGE_PROVIDER_META:
+    def save_image_generation_options(self, provider: str, model: str, options: dict[str, Any]) -> bool:
+        """包含整个读-改-写事务的锁，避免并发标签页覆盖其他渠道参数。"""
+        if provider not in IMAGE_PROVIDER_META and provider != "codex_images":
             raise ValueError(f"未知图片生成渠道: {provider}")
-        config = self.load_config()
-        all_options = config.get("image_generation_options") or {}
-        if not isinstance(all_options, dict):
-            all_options = {}
-        all_options = deepcopy(all_options)
-        provider_options = all_options.setdefault(provider, {})
-        provider_options[self._options_model_key(model)] = deepcopy(options)
-        return self.save_config({"image_generation_options": all_options})
+        with self._config_lock:
+            config = self.load_config()
+            all_options = config.get("image_generation_options") or {}
+            if not isinstance(all_options, dict):
+                all_options = {}
+            all_options = deepcopy(all_options)
+            all_options.setdefault(provider, {})[self._options_model_key(model)] = deepcopy(options)
+            return self.save_config({"image_generation_options": all_options})
 
     def get_openai_image_config(self) -> dict:
         config = self.load_config()

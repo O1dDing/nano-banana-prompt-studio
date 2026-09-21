@@ -10,6 +10,9 @@ from nano_banana.core.chat import (
     create_chat_client,
 )
 from nano_banana.core.web_search import iter_stage1_events
+from nano_banana.core.codex_client import iter_prompt_sse
+from nano_banana.core.codex_schema import prompt_output_schema
+from nano_banana.core.chat import strip_code_fences
 from nano_banana.web.context import config_manager
 
 bp = Blueprint("chat", __name__)
@@ -63,8 +66,19 @@ def _iter_stage1_sse(
             http_client.close()
 
 
-def _sse_from_messages(messages: list[dict[str, Any]]):
+def _sse_from_messages(messages: list[dict[str, Any]], current_data=None):
     chat = config_manager.get_chat_config()
+    if chat.get("engine") == "codex":
+        current = None
+        if isinstance(current_data, str):
+            try:
+                current, _ = json.JSONDecoder().raw_decode(strip_code_fences(current_data).lstrip())
+            except (ValueError, TypeError):
+                pass
+        response = Response(iter_prompt_sse(messages, chat, prompt_output_schema(current)), mimetype="text/event-stream")
+        response.headers["Cache-Control"] = "no-cache"
+        response.headers["X-Accel-Buffering"] = "no"
+        return response
     if not chat["api_key"]:
         return jsonify({"error": "请先配置API密钥"}), 400
     if not chat["base_url"]:
@@ -105,6 +119,6 @@ def modify_prompt():
         if not current_data or not modify_request:
             return jsonify({"error": "当前数据和修改要求不能为空"}), 400
         messages = build_modify_messages(current_data, modify_request, images)
-        return _sse_from_messages(messages)
+        return _sse_from_messages(messages, current_data=current_data)
     except Exception as exc:  # noqa: BLE001
         return jsonify({"error": str(exc)}), 500
