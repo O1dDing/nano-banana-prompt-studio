@@ -1,5 +1,8 @@
 """AI API 配置管理。对话 AI 与图片生成渠道使用相互独立的配置。"""
 from copy import deepcopy
+import os
+import tempfile
+import threading
 from typing import Any
 
 import yaml
@@ -21,6 +24,10 @@ def flatten_legacy_or_nested(data: dict[str, Any]) -> dict[str, Any]:
         for key in ("base_url", "api_key", "model"):
             if key in chat:
                 result[key] = chat[key]
+        if "web_search_mode" in chat:
+            result["chat_web_search_mode"] = chat["web_search_mode"]
+        elif "chat_web_search_mode" in chat:
+            result["chat_web_search_mode"] = chat["chat_web_search_mode"]
     image = data.get("image")
     if isinstance(image, dict):
         if "active" in image:
@@ -57,6 +64,7 @@ def nest_config(flat: dict[str, Any]) -> dict[str, Any]:
             "base_url": flat.get("base_url") or "",
             "api_key": flat.get("api_key") or "",
             "model": flat.get("model") or "",
+            "web_search_mode": flat.get("chat_web_search_mode") or "auto",
         },
         "image": {
             "active": flat.get("image_provider") or "gemini",
@@ -73,6 +81,7 @@ class AIConfigManager:
         "base_url": "https://api.openai.com/v1",
         "api_key": "",
         "model": "gpt-5.1",
+        "chat_web_search_mode": "auto",
         "image_provider": "gemini",
         "gemini_base_url": "",
         "gemini_api_key": "",
@@ -90,6 +99,7 @@ class AIConfigManager:
     }
     
     def __init__(self):
+        self._config_lock = threading.RLock()
         self.config_path = get_resource_path("config/ai_config.yaml")
         self._ensure_config_exists()
     
@@ -98,42 +108,61 @@ class AIConfigManager:
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
     
     def load_config(self) -> dict:
-        """加载 AI 配置，对外始终返回扁平 dict（兼容旧调用方）。"""
-        try:
-            if self.config_path.exists():
-                with open(self.config_path, "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f)
-                    if isinstance(data, dict) and data:
-                        return self._normalize_flat(data)
-        except Exception as e:
-            print(f"加载AI配置失败: {e}")
-        return {
-            key: deepcopy(default) if isinstance(default, dict) else ""
-            for key, default in self.DEFAULT_CONFIG.items()
-        }
-
-    def save_config(self, config: dict, merge_existing: bool = True) -> bool:
-        """保存 AI 配置。磁盘写入嵌套结构，读取时仍兼容旧扁平 yaml。"""
-        try:
-            current = self.load_config() if merge_existing else {
+        """加载 AI 配置；与写入共用可重入锁，避免并发读取半写文件。"""
+        with self._config_lock:
+            try:
+                if self.config_path.exists():
+                    with open(self.config_path, "r", encoding="utf-8") as f:
+                        data = yaml.safe_load(f)
+                        if isinstance(data, dict) and data:
+                            return self._normalize_flat(data)
+            except Exception as e:
+                print(f"加载AI配置失败: {e}")
+            return {
                 key: deepcopy(default) if isinstance(default, dict) else ""
                 for key, default in self.DEFAULT_CONFIG.items()
             }
-            updates = flatten_legacy_or_nested(config) if isinstance(config, dict) else {}
-            current.update(updates)
-            nested = nest_config(current)
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                yaml.dump(
-                    nested,
-                    f,
-                    allow_unicode=True,
-                    default_flow_style=False,
-                    sort_keys=False,
+
+    def save_config(self, config: dict, merge_existing: bool = True) -> bool:
+        """加锁并原子写入配置，支持多个 Web 标签页并发操作。"""
+        with self._config_lock:
+            temp_path = None
+            try:
+                current = self.load_config() if merge_existing else {
+                    key: deepcopy(default) if isinstance(default, dict) else ""
+                    for key, default in self.DEFAULT_CONFIG.items()
+                }
+                updates = flatten_legacy_or_nested(config) if isinstance(config, dict) else {}
+                current.update(updates)
+                nested = nest_config(current)
+                self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                fd, temp_path = tempfile.mkstemp(
+                    prefix=f".{self.config_path.name}.",
+                    suffix=".tmp",
+                    dir=str(self.config_path.parent),
                 )
-            return True
-        except Exception as e:
-            print(f"保存AI配置失败: {e}")
-            return False
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    yaml.dump(
+                        nested,
+                        f,
+                        allow_unicode=True,
+                        default_flow_style=False,
+                        sort_keys=False,
+                    )
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_path, self.config_path)
+                temp_path = None
+                return True
+            except Exception as e:
+                print(f"保存AI配置失败: {e}")
+                return False
+            finally:
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
 
     def _normalize_flat(self, data: dict) -> dict:
         flat = flatten_legacy_or_nested(data)
@@ -156,6 +185,9 @@ class AIConfigManager:
             "base_url": (config.get("base_url") or "").strip(),
             "api_key": (config.get("api_key") or "").strip(),
             "model": (config.get("model") or "").strip(),
+            "web_search_mode": (
+                config.get("chat_web_search_mode") or "auto"
+            ).strip(),
         }
     
     def get_base_url(self) -> str:
