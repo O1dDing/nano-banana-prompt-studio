@@ -58,7 +58,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src deploy pyproject.toml tools .github/workflows/web-regression.yml
+          git add src deploy pyproject.toml tools
           git commit -m 'feat(access): 接入持久身份、多管理员、配置恢复和升级流程'
           git push origin HEAD:feat/cloudflare-profiles-admins-20260921
       - name: Run Python regression
